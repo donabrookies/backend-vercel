@@ -11,12 +11,17 @@ const app = express();
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+console.log('🚀 Iniciando backend Dona Brookies...');
+console.log('📡 Supabase URL:', supabaseUrl ? '✅ Configurada' : '❌ Faltando');
+console.log('🔑 Supabase KEY:', supabaseKey ? '✅ Configurada' : '❌ Faltando');
+
 if (!supabaseUrl || !supabaseKey) {
-    console.error("❌ Variáveis de ambiente SUPABASE_URL e SUPABASE_KEY são obrigatórias");
+    console.error("❌ ERRO: Variáveis de ambiente SUPABASE_URL e SUPABASE_KEY são obrigatórias");
     process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
+console.log('✅ Supabase cliente criado com sucesso!');
 
 // Middleware CORS CONFIGURADO - PERMITE TODOS OS DOMÍNIOS
 app.use(cors({
@@ -28,14 +33,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// REMOVA O CACHE EM MEMÓRIA - Não funciona na Vercel
-// let cache = {
-//     products: null,
-//     productsTimestamp: 0
-// };
-
-// const CACHE_DURATION = 2 * 60 * 1000;
 
 // Função para criptografar
 function simpleEncrypt(text) {
@@ -285,25 +282,10 @@ async function ensureAdminCredentials() {
                 console.log('✅ Credenciais admin criadas com sucesso!');
                 console.log('📋 Usuário: admin');
                 console.log('🔑 Senha: admin123');
-                console.log('🔐 Senha criptografada:', encryptedPassword);
                 return true;
             }
         } else {
             console.log('✅ Credenciais admin já existem');
-            console.log('📋 Usuário:', existingCreds.username);
-            console.log('🔑 Senha no banco:', existingCreds.password);
-            console.log('🔐 Senha criptografada no banco:', existingCreds.encrypted_password);
-            
-            // Verificar se a senha criptografada está correta
-            const testPassword = 'admin123';
-            const testEncrypted = simpleEncrypt(testPassword);
-            console.log('🔍 Testando criptografia:', {
-                senha_teste: testPassword,
-                criptografado_teste: testEncrypted,
-                criptografado_banco: existingCreds.encrypted_password,
-                coincide: testEncrypted === existingCreds.encrypted_password
-            });
-            
             return true;
         }
     } catch (error) {
@@ -314,7 +296,257 @@ async function ensureAdminCredentials() {
 
 // ENDPOINTS DA API
 
-// Autenticação - CORRIGIDA
+// Health check
+app.get("/", (req, res) => {
+    res.json({ 
+        message: "🚀 Backend Dona Brookies na VERCEL está funcionando!", 
+        status: "OK",
+        platform: "Vercel Serverless",
+        timestamp: new Date().toISOString()
+    });
+});
+
+// DIAGNÓSTICO - Testa conexão com Supabase
+app.get("/diagnostico", async (req, res) => {
+    try {
+        console.log('🔍 Iniciando diagnóstico...');
+        
+        const resultados = {
+            backend: "✅ Online",
+            supabase_config: {
+                url: !!supabaseUrl,
+                key: !!supabaseKey,
+                cliente: !!supabase
+            },
+            tabelas: {}
+        };
+
+        // TESTE: Verificar se tabela products existe
+        console.log('📦 Testando tabela products...');
+        try {
+            const { data: products, error } = await supabase
+                .from('products')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.products = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: products?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.products = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
+        // TESTE: Verificar se tabela categories existe
+        console.log('🏷️ Testando tabela categories...');
+        try {
+            const { data: categories, error } = await supabase
+                .from('categories')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.categories = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: categories?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.categories = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
+        // TESTE: Verificar se tabela admin_credentials existe
+        console.log('🔐 Testando tabela admin_credentials...');
+        try {
+            const { data: credentials, error } = await supabase
+                .from('admin_credentials')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.admin_credentials = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: credentials?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.admin_credentials = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
+        console.log('📊 Diagnóstico completo:', resultados);
+        res.json(resultados);
+
+    } catch (error) {
+        console.error('❌ Erro no diagnóstico:', error);
+        res.json({ 
+            erro: error.message,
+            backend: "✅ Online" 
+        });
+    }
+});
+
+// Buscar produtos - COM FALLBACK SE TABELA NÃO EXISTIR
+app.get("/api/products", async (req, res) => {
+    try {
+        console.log('🔄 Buscando produtos do Supabase...');
+        
+        const { data: products, error } = await supabase
+            .from('products')
+            .select('*')
+            .order('display_order', { ascending: true, nullsFirst: false })
+            .order('id');
+
+        if (error) {
+            console.error('❌ Erro ao buscar produtos:', error.message);
+            
+            // Se tabela não existe, retornar produtos de exemplo
+            if (error.message.includes('does not exist')) {
+                console.log('📦 Tabela products não existe, retornando exemplo...');
+                const produtosExemplo = [
+                    {
+                        id: 1,
+                        title: "Brownie Tradicional",
+                        category: "brownie",
+                        price: 8.50,
+                        description: "Brownie tradicional de chocolate",
+                        sabores: [
+                            {
+                                name: "Chocolate",
+                                image: "https://via.placeholder.com/400x300/8B4513/FFFFFF?text=Brownie",
+                                quantity: 10,
+                                description: "Sabor clássico de chocolate"
+                            }
+                        ],
+                        status: "active",
+                        display_order: 1
+                    },
+                    {
+                        id: 2,
+                        title: "Cookie de Chocolate",
+                        category: "cookie",
+                        price: 6.00,
+                        description: "Cookie crocante com gotas de chocolate",
+                        sabores: [
+                            {
+                                name: "Chocolate",
+                                image: "https://via.placeholder.com/400x300/8B4513/FFFFFF?text=Cookie",
+                                quantity: 15,
+                                description: "Cookie com gotas de chocolate"
+                            }
+                        ],
+                        status: "active",
+                        display_order: 2
+                    }
+                ];
+                return res.json({ products: produtosExemplo });
+            }
+            
+            return res.json({ products: [] });
+        }
+
+        console.log(`✅ ${products?.length || 0} produtos encontrados`);
+        
+        // Se não há produtos, retornar exemplo
+        if (!products || products.length === 0) {
+            console.log('📦 Nenhum produto no banco, retornando exemplo...');
+            const produtosExemplo = [
+                {
+                    id: 1,
+                    title: "Brownie de Teste",
+                    category: "brownie",
+                    price: 8.50,
+                    description: "Brownie de exemplo para teste",
+                    sabores: [
+                        {
+                            name: "Chocolate",
+                            image: "https://via.placeholder.com/400x300/8B4513/FFFFFF?text=Brownie",
+                            quantity: 5,
+                            description: "Sabor de teste"
+                        }
+                    ],
+                    status: "active",
+                    display_order: 1
+                }
+            ];
+            return res.json({ products: produtosExemplo });
+        }
+
+        const normalizedProducts = normalizeProducts(products);
+        res.json({ products: normalizedProducts });
+        
+    } catch (error) {
+        console.error('❌ Erro geral em /api/products:', error);
+        res.json({ products: [] });
+    }
+});
+
+// Buscar categorias - COM FALLBACK SE TABELA NÃO EXISTIR
+app.get("/api/categories", async (req, res) => {
+    try {
+        console.log('🔄 Buscando categorias do Supabase...');
+        
+        const { data: categories, error } = await supabase
+            .from('categories')
+            .select('*')
+            .order('name');
+
+        if (error) {
+            console.error('❌ Erro ao buscar categorias:', error.message);
+            
+            // Se tabela não existe, retornar categorias de exemplo
+            if (error.message.includes('does not exist')) {
+                console.log('🏷️ Tabela categories não existe, retornando exemplo...');
+                const categoriasExemplo = [
+                    {
+                        id: "brownie",
+                        name: "Brownies",
+                        description: "Deliciosos brownies caseiros"
+                    },
+                    {
+                        id: "cookie", 
+                        name: "Cookies",
+                        description: "Cookies crocantes e saborosos"
+                    }
+                ];
+                return res.json({ categories: categoriasExemplo });
+            }
+            
+            return res.json({ categories: [] });
+        }
+
+        console.log(`✅ ${categories?.length || 0} categorias encontradas`);
+        
+        // Se não há categorias, retornar exemplo
+        if (!categories || categories.length === 0) {
+            console.log('🏷️ Nenhuma categoria no banco, retornando exemplo...');
+            const categoriasExemplo = [
+                {
+                    id: "brownie",
+                    name: "Brownies",
+                    description: "Brownies caseiros"
+                }
+            ];
+            return res.json({ categories: categoriasExemplo });
+        }
+
+        const normalizedCategories = normalizeCategories(categories);
+        res.json({ categories: normalizedCategories });
+        
+    } catch (error) {
+        console.error('❌ Erro geral em /api/categories:', error);
+        res.json({ categories: [] });
+    }
+});
+
+// Autenticação - COM FALLBACK SE TABELA NÃO EXISTIR
 app.post("/api/auth/login", async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -325,6 +557,7 @@ app.post("/api/auth/login", async (req, res) => {
             return res.status(400).json({ error: "Usuário e senha são obrigatórios" });
         }
 
+        // Tenta buscar credenciais no Supabase
         const { data: credentials, error } = await supabase
             .from('admin_credentials')
             .select('*')
@@ -333,33 +566,39 @@ app.post("/api/auth/login", async (req, res) => {
 
         if (error) {
             console.log('❌ Erro ao buscar credenciais:', error.message);
-            return res.status(401).json({ error: "Credenciais inválidas" });
+            
+            // Se tabela não existe ou não tem credenciais, usar padrão
+            if (error.message.includes('does not exist') || error.code === 'PGRST116') {
+                console.log('👤 Usando credenciais padrão...');
+                
+                // Credenciais padrão de fallback
+                if (username === "admin" && password === "admin123") {
+                    console.log('✅ Login bem-sucedido com credenciais padrão');
+                    return res.json({ 
+                        success: true, 
+                        token: "authenticated_admin_token", 
+                        user: { username: "admin" } 
+                    });
+                } else {
+                    console.log('❌ Credenciais padrão incorretas');
+                    return res.status(401).json({ error: "Credenciais inválidas" });
+                }
+            }
+            
+            return res.status(401).json({ error: "Erro no sistema" });
         }
 
         if (!credentials) {
-            console.log('❌ Credenciais não encontradas para:', username);
+            console.log('❌ Credenciais não encontradas');
             return res.status(401).json({ error: "Credenciais inválidas" });
         }
 
-        console.log('🔍 Credencial encontrada:', {
-            usuario: credentials.username,
-            senha_banco: credentials.password,
-            senha_criptografada_banco: credentials.encrypted_password
-        });
+        console.log('🔍 Credencial encontrada:', credentials.username);
         
-        // Verificar senha em texto plano (mais simples)
+        // Verificar senha (texto plano para simplificar)
         const isPlainPasswordValid = password === credentials.password;
-        
-        // Verificar senha criptografada
         const encryptedInput = simpleEncrypt(password);
         const isPasswordValid = encryptedInput === credentials.encrypted_password;
-
-        console.log('🔐 Verificação de senha:', {
-            senha_digitada: password,
-            senha_criptografada_digitada: encryptedInput,
-            valida_texto: isPlainPasswordValid,
-            valida_cripto: isPasswordValid
-        });
 
         if (isPasswordValid || isPlainPasswordValid) {
             console.log('✅ Login bem-sucedido para:', username);
@@ -378,57 +617,19 @@ app.post("/api/auth/login", async (req, res) => {
     }
 });
 
-// Buscar produtos (SEM CACHE)
-app.get("/api/products", async (req, res) => {
+// Verificar autenticação
+app.get("/api/auth/verify", async (req, res) => {
     try {
-        const { data: products, error } = await supabase
-            .from('products')
-            .select('*')
-            .order('display_order', { ascending: true, nullsFirst: false })
-            .order('id');
-
-        if (error) {
-            console.error("Erro Supabase produtos:", error.message);
-            return res.json({ products: [] });
-        }
-
-        const normalizedProducts = normalizeProducts(products || []);
-        res.json({ products: normalizedProducts });
-    } catch (error) {
-        console.error("Erro ao buscar produtos:", error);
-        res.json({ products: [] });
-    }
-});
-
-// Buscar categorias
-app.get("/api/categories", async (req, res) => {
-    try {
-        console.log('🔄 Buscando categorias...');
+        const token = req.headers.authorization?.replace("Bearer ", "");
         
-        const { data: categories, error } = await supabase
-            .from('categories')
-            .select('*')
-            .order('name');
-
-        if (error) {
-            console.error("❌ Erro ao buscar categorias:", error.message);
-            return res.json({ categories: [] });
-        }
-
-        let normalizedCategories = [];
-        
-        if (categories && categories.length > 0) {
-            normalizedCategories = normalizeCategories(categories);
-            console.log(`✅ ${normalizedCategories.length} categorias carregadas do banco`);
+        if (token && checkAuth(token)) {
+            res.json({ valid: true, user: { username: "admin" } });
         } else {
-            console.log('ℹ️ Nenhuma categoria encontrada no banco');
-            normalizedCategories = [];
+            res.json({ valid: false });
         }
-
-        res.json({ categories: normalizedCategories });
     } catch (error) {
-        console.error("❌ Erro ao buscar categorias:", error);
-        res.json({ categories: [] });
+        console.error("Erro ao verificar autenticação:", error);
+        res.status(500).json({ error: "Erro ao verificar autenticação" });
     }
 });
 
@@ -484,7 +685,7 @@ app.post("/api/products", async (req, res) => {
     }
 });
 
-// ENDPOINT OTIMIZADO: Atualizar estoque após pedido - CORRIGIDO E MELHORADO
+// ENDPOINT OTIMIZADO: Atualizar estoque após pedido
 app.post("/api/orders/update-stock", async (req, res) => {
     try {
         const { items } = req.body;
@@ -495,7 +696,6 @@ app.post("/api/orders/update-stock", async (req, res) => {
             return res.status(400).json({ error: "Nenhum item para atualizar estoque" });
         }
 
-        // Validar itens antes de processar
         const validItems = items.filter(item => 
             item && 
             typeof item.id === 'number' && 
@@ -508,9 +708,8 @@ app.post("/api/orders/update-stock", async (req, res) => {
             return res.status(400).json({ error: "Nenhum item válido para atualizar estoque" });
         }
 
-        console.log(`📦 Processando ${validItems.length} itens válidos de ${items.length} totais`);
+        console.log(`📦 Processando ${validItems.length} itens válidos`);
 
-        // Usar a nova função otimizada
         const result = await updateStockForOrder(validItems);
 
         console.log('✅ Atualização de estoque concluída com sucesso');
@@ -518,9 +717,6 @@ app.post("/api/orders/update-stock", async (req, res) => {
         
     } catch (error) {
         console.error("❌ Erro ao atualizar estoque:", error);
-        
-        // Mesmo com erro, retornar sucesso para não bloquear WhatsApp
-        // Mas com flag indicando que houve problema
         res.json({ 
             success: true, 
             message: "Pedido processado, mas estoque pode precisar de verificação manual",
@@ -567,84 +763,6 @@ app.post("/api/categories/add", async (req, res) => {
     } catch (error) {
         console.error("❌ Erro ao adicionar categoria:", error);
         res.status(500).json({ error: "Erro ao adicionar categoria: " + error.message });
-    }
-});
-
-// Excluir categoria
-app.delete("/api/categories/:categoryId", async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
-            return res.status(401).json({ error: "Não autorizado" });
-        }
-        
-        const { categoryId } = req.params;
-        console.log(`🗑️ Tentando excluir categoria: ${categoryId}`);
-        
-        const { data: category, error: fetchError } = await supabase
-            .from('categories')
-            .select('*')
-            .eq('id', categoryId)
-            .single();
-
-        if (fetchError || !category) {
-            console.log('❌ Categoria não encontrada:', categoryId);
-            return res.status(404).json({ error: "Categoria não encontrada" });
-        }
-
-        console.log('✅ Categoria encontrada:', category.name);
-
-        const { data: productsInCategory, error: productsError } = await supabase
-            .from('products')
-            .select('id, title')
-            .eq('category', categoryId);
-
-        if (productsError) {
-            console.error('❌ Erro ao verificar produtos:', productsError);
-            throw productsError;
-        }
-
-        if (productsInCategory && productsInCategory.length > 0) {
-            console.log(`🔄 Movendo ${productsInCategory.length} produtos da categoria...`);
-            
-            const { data: otherCategories } = await supabase
-                .from('categories')
-                .select('id')
-                .neq('id', categoryId)
-                .limit(1);
-
-            if (otherCategories && otherCategories.length > 0) {
-                const newCategoryId = otherCategories[0].id;
-                const { error: updateError } = await supabase
-                    .from('products')
-                    .update({ category: newCategoryId })
-                    .eq('category', categoryId);
-
-                if (updateError) {
-                    console.error('❌ Erro ao mover produtos:', updateError);
-                    throw updateError;
-                }
-                console.log(`✅ ${productsInCategory.length} produtos movidos para categoria: ${newCategoryId}`);
-            } else {
-                console.log('⚠️ Nenhuma outra categoria encontrada, produtos não movidos');
-            }
-        }
-
-        const { error: deleteError } = await supabase
-            .from('categories')
-            .delete()
-            .eq('id', categoryId);
-
-        if (deleteError) {
-            console.error('❌ Erro ao excluir categoria:', deleteError);
-            throw deleteError;
-        }
-
-        console.log('✅ Categoria excluída com sucesso:', categoryId);
-        res.json({ success: true, message: `Categoria "${category.name}" excluída` });
-    } catch (error) {
-        console.error("❌ Erro ao excluir categoria:", error);
-        res.status(500).json({ error: "Erro ao excluir categoria: " + error.message });
     }
 });
 
@@ -702,80 +820,17 @@ app.post("/api/categories", async (req, res) => {
     }
 });
 
-// Verificar autenticação
-app.get("/api/auth/verify", async (req, res) => {
-    try {
-        const token = req.headers.authorization?.replace("Bearer ", "");
-        
-        if (token && checkAuth(token)) {
-            res.json({ valid: true, user: { username: "admin" } });
-        } else {
-            res.json({ valid: false });
-        }
-    } catch (error) {
-        console.error("Erro ao verificar autenticação:", error);
-        res.status(500).json({ error: "Erro ao verificar autenticação" });
+// Inicializar servidor
+console.log('✅ Backend Dona Brookies carregado com sucesso!');
+console.log('🔧 Inicializando credenciais admin...');
+
+// Garantir credenciais admin ao iniciar
+ensureAdminCredentials().then(success => {
+    if (success) {
+        console.log('✅ Sistema pronto para uso!');
+    } else {
+        console.log('⚠️ Sistema carregado, mas credenciais admin podem precisar de atenção');
     }
 });
 
-// Health check
-app.get("/", (req, res) => {
-    res.json({ 
-        message: "🚀 Backend Urban Z SABORES na VERCEL está funcionando!", 
-        status: "OK",
-        performance: "TURBO ⚡",
-        platform: "Vercel Serverless",
-        timestamp: new Date().toISOString()
-    });
-});
-
-// Endpoint para ver categorias do banco (debug)
-app.get("/api/debug/categories", async (req, res) => {
-    try {
-        const { data: categories, error } = await supabase
-            .from('categories')
-            .select('*')
-            .order('name');
-        
-        if (error) throw error;
-        
-        res.json({ 
-            categories: categories || [],
-            count: categories ? categories.length : 0 
-        });
-    } catch (error) {
-        res.json({ categories: [], error: error.message });
-    }
-});
-
-// Endpoint para ver credenciais (debug)
-app.get("/api/debug/credentials", async (req, res) => {
-    try {
-        const { data: credentials, error } = await supabase
-            .from('admin_credentials')
-            .select('*');
-        
-        if (error) throw error;
-        
-        res.json({ 
-            credentials: credentials || [],
-            count: credentials ? credentials.length : 0 
-        });
-    } catch (error) {
-        res.json({ credentials: [], error: error.message });
-    }
-});
-
-// Endpoint para testar criptografia
-app.get("/api/debug/encrypt/:text", (req, res) => {
-    const text = req.params.text;
-    const encrypted = simpleEncrypt(text);
-    res.json({
-        original: text,
-        encrypted: encrypted,
-        decrypted: simpleDecrypt(encrypted)
-    });
-});
-
-// Inicializar servidor - IMPORTANTE: Export para Vercel
 export default app;
