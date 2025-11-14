@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from '@supabase/supabase-js';
+import webpush from 'web-push';
 
 dotenv.config();
 
@@ -22,6 +23,20 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('✅ Supabase cliente criado com sucesso!');
+
+// Configuração Web Push (Notificações)
+const vapidKeys = {
+    publicKey: process.env.VAPID_PUBLIC_KEY || "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U",
+    privateKey: process.env.VAPID_PRIVATE_KEY || "d5zBhhF6R1K4YrXgXZzLJjvq8WJQ4eY2W3n7oP5tH2k"
+};
+
+webpush.setVapidDetails(
+    'mailto:donabrookies@example.com',
+    vapidKeys.publicKey,
+    vapidKeys.privateKey
+);
+
+console.log('🔔 Sistema de notificações push configurado');
 
 // Middleware CORS CONFIGURADO - PERMITE TODOS OS DOMÍNIOS
 app.use(cors({
@@ -376,6 +391,26 @@ app.get("/diagnostico", async (req, res) => {
             };
         } catch (error) {
             resultados.tabelas.admin_credentials = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
+        // TESTE: Verificar se tabela push_subscriptions existe
+        console.log('🔔 Testando tabela push_subscriptions...');
+        try {
+            const { data: subscriptions, error } = await supabase
+                .from('push_subscriptions')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.push_subscriptions = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: subscriptions?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.push_subscriptions = {
                 existe: false,
                 erro: error.message
             };
@@ -883,6 +918,238 @@ app.post("/api/categories", async (req, res) => {
     } catch (error) {
         console.error("❌ Erro ao salvar categorias:", error);
         res.status(500).json({ error: "Erro ao salvar categorias: " + error.message });
+    }
+});
+
+// ===== SISTEMA DE NOTIFICAÇÕES PUSH =====
+
+// Gerenciar inscrições de notificações push
+app.post("/api/push/subscription", async (req, res) => {
+    try {
+        const { subscription, action } = req.body;
+        
+        if (!subscription) {
+            return res.status(400).json({ error: "Subscription é obrigatória" });
+        }
+
+        console.log(`🔔 ${action === 'subscribe' ? 'Nova inscrição' : 'Cancelamento'} de notificação push`);
+
+        // Verificar se a tabela push_subscriptions existe, se não, criar
+        const { error: tableCheckError } = await supabase
+            .from('push_subscriptions')
+            .select('*')
+            .limit(1);
+
+        if (tableCheckError && tableCheckError.message.includes('does not exist')) {
+            console.log('📋 Criando tabela push_subscriptions...');
+            
+            // Criar tabela se não existir
+            const { error: createTableError } = await supabase.rpc('create_push_subscriptions_table');
+            
+            if (createTableError) {
+                console.error('❌ Erro ao criar tabela push_subscriptions:', createTableError);
+                // Continuar mesmo com erro na criação da tabela
+            }
+        }
+
+        if (action === 'subscribe') {
+            // Inserir ou atualizar subscription
+            const { error } = await supabase
+                .from('push_subscriptions')
+                .upsert({
+                    endpoint: subscription.endpoint,
+                    subscription_data: subscription,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'endpoint'
+                });
+
+            if (error) {
+                console.error('❌ Erro ao salvar subscription:', error);
+                return res.status(500).json({ error: "Erro ao salvar subscription" });
+            }
+
+            console.log('✅ Subscription salva com sucesso');
+            res.json({ success: true, message: "Inscrição realizada com sucesso" });
+
+        } else if (action === 'unsubscribe') {
+            // Remover subscription
+            const { error } = await supabase
+                .from('push_subscriptions')
+                .delete()
+                .eq('endpoint', subscription.endpoint);
+
+            if (error) {
+                console.error('❌ Erro ao remover subscription:', error);
+                return res.status(500).json({ error: "Erro ao remover subscription" });
+            }
+
+            console.log('✅ Subscription removida com sucesso');
+            res.json({ success: true, message: "Inscrição cancelada com sucesso" });
+        }
+
+    } catch (error) {
+        console.error("❌ Erro no gerenciamento de subscription:", error);
+        res.status(500).json({ error: "Erro no processo de subscription" });
+    }
+});
+
+// Enviar notificação para todos os usuários
+app.post("/api/push/send", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+        
+        const { title, message, url } = req.body;
+        
+        if (!title || !message) {
+            return res.status(400).json({ error: "Título e mensagem são obrigatórios" });
+        }
+
+        console.log(`📤 Enviando notificação: "${title}"`);
+
+        // Buscar todas as subscriptions
+        const { data: subscriptions, error } = await supabase
+            .from('push_subscriptions')
+            .select('*');
+
+        if (error) {
+            console.error('❌ Erro ao buscar subscriptions:', error);
+            throw error;
+        }
+
+        if (!subscriptions || subscriptions.length === 0) {
+            console.log('ℹ️ Nenhum usuário inscrito para notificações');
+            return res.json({ success: true, sent: 0, message: "Nenhum usuário inscrito" });
+        }
+
+        console.log(`📨 Enviando para ${subscriptions.length} usuários...`);
+
+        const notificationPayload = {
+            title: title,
+            body: message,
+            icon: '/icons/icon-192x192.png',
+            badge: '/icons/icon-192x192.png',
+            data: {
+                url: url || '/',
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        // Enviar notificação para cada subscription
+        const sendPromises = subscriptions.map(async (sub) => {
+            try {
+                await webpush.sendNotification(
+                    sub.subscription_data,
+                    JSON.stringify(notificationPayload)
+                );
+                return { success: true, endpoint: sub.endpoint };
+            } catch (error) {
+                console.error(`❌ Erro ao enviar para ${sub.endpoint}:`, error);
+                
+                // Se a subscription é inválida, remover do banco
+                if (error.statusCode === 410 || error.statusCode === 404) {
+                    console.log(`🗑️ Removendo subscription inválida: ${sub.endpoint}`);
+                    await supabase
+                        .from('push_subscriptions')
+                        .delete()
+                        .eq('endpoint', sub.endpoint);
+                }
+                
+                return { success: false, endpoint: sub.endpoint, error: error.message };
+            }
+        });
+
+        const results = await Promise.all(sendPromises);
+        const successfulSends = results.filter(r => r.success).length;
+        const failedSends = results.filter(r => !r.success).length;
+
+        console.log(`✅ Notificação enviada: ${successfulSends} sucessos, ${failedSends} falhas`);
+
+        // Registrar estatística da notificação
+        try {
+            await supabase
+                .from('notification_stats')
+                .insert({
+                    title: title,
+                    message: message,
+                    url: url,
+                    sent_count: successfulSends,
+                    total_subscribers: subscriptions.length,
+                    sent_at: new Date().toISOString()
+                });
+        } catch (statsError) {
+            console.error('⚠️ Erro ao salvar estatísticas:', statsError);
+        }
+
+        res.json({ 
+            success: true, 
+            sent: successfulSends,
+            total: subscriptions.length,
+            failed: failedSends,
+            message: `Notificação enviada para ${successfulSends} usuários`
+        });
+
+    } catch (error) {
+        console.error("❌ Erro ao enviar notificação:", error);
+        res.status(500).json({ error: "Erro ao enviar notificação: " + error.message });
+    }
+});
+
+// Obter estatísticas de notificações
+app.get("/api/push/stats", async (req, res) => {
+    try {
+        // Contar total de inscritos
+        const { count: totalSubscribers, error: countError } = await supabase
+            .from('push_subscriptions')
+            .select('*', { count: 'exact', head: true });
+
+        if (countError) {
+            console.error('❌ Erro ao contar subscribers:', countError);
+            throw countError;
+        }
+
+        // Buscar estatísticas de notificações enviadas
+        const { data: stats, error: statsError } = await supabase
+            .from('notification_stats')
+            .select('*')
+            .order('sent_at', { ascending: false })
+            .limit(1);
+
+        let notificationsSent = 0;
+        let lastSent = null;
+
+        if (!statsError && stats && stats.length > 0) {
+            // Calcular total de notificações enviadas
+            const { data: allStats, error: allStatsError } = await supabase
+                .from('notification_stats')
+                .select('sent_count');
+
+            if (!allStatsError && allStats) {
+                notificationsSent = allStats.reduce((total, stat) => total + (stat.sent_count || 0), 0);
+            }
+
+            lastSent = stats[0].sent_at;
+        }
+
+        res.json({
+            success: true,
+            totalSubscribers: totalSubscribers || 0,
+            notificationsSent: notificationsSent,
+            lastSent: lastSent
+        });
+
+    } catch (error) {
+        console.error("❌ Erro ao buscar estatísticas:", error);
+        res.json({
+            success: true,
+            totalSubscribers: 0,
+            notificationsSent: 0,
+            lastSent: null
+        });
     }
 });
 
