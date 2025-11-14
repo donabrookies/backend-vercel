@@ -766,6 +766,72 @@ app.post("/api/categories/add", async (req, res) => {
     }
 });
 
+// NOVO ENDPOINT: Excluir categoria
+app.post("/api/categories/delete", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+        
+        const { categoryId } = req.body;
+        
+        if (!categoryId) {
+            return res.status(400).json({ error: "ID da categoria é obrigatório" });
+        }
+
+        console.log(`🗑️ Excluindo categoria: ${categoryId}`);
+
+        // Primeiro, verificar se existem produtos nesta categoria
+        const { data: productsInCategory, error: productsError } = await supabase
+            .from('products')
+            .select('id, title')
+            .eq('category', categoryId);
+
+        if (productsError) {
+            console.error('❌ Erro ao verificar produtos da categoria:', productsError);
+            throw productsError;
+        }
+
+        // Se existem produtos nesta categoria, mover para categoria padrão ou deixar sem categoria
+        if (productsInCategory && productsInCategory.length > 0) {
+            console.log(`📦 Movendo ${productsInCategory.length} produtos para categoria padrão...`);
+            
+            const { error: updateError } = await supabase
+                .from('products')
+                .update({ category: 'default' })
+                .eq('category', categoryId);
+
+            if (updateError) {
+                console.error('❌ Erro ao mover produtos:', updateError);
+                throw updateError;
+            }
+
+            console.log(`✅ ${productsInCategory.length} produtos movidos para categoria padrão`);
+        }
+
+        // Agora excluir a categoria
+        const { error: deleteError } = await supabase
+            .from('categories')
+            .delete()
+            .eq('id', categoryId);
+
+        if (deleteError) {
+            console.error('❌ Erro ao excluir categoria:', deleteError);
+            throw deleteError;
+        }
+
+        console.log('✅ Categoria excluída com sucesso:', categoryId);
+        res.json({ 
+            success: true, 
+            message: `Categoria excluída com sucesso! ${productsInCategory?.length || 0} produtos foram movidos para categoria padrão.` 
+        });
+    } catch (error) {
+        console.error("❌ Erro ao excluir categoria:", error);
+        res.status(500).json({ error: "Erro ao excluir categoria: " + error.message });
+    }
+});
+
 // Salvar categorias
 app.post("/api/categories", async (req, res) => {
     try {
