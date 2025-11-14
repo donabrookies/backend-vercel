@@ -25,18 +25,16 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('✅ Supabase cliente criado com sucesso!');
 
 // Configuração Web Push (Notificações)
-const vapidKeys = {
-    publicKey: process.env.VAPID_PUBLIC_KEY || "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U",
-    privateKey: process.env.VAPID_PRIVATE_KEY || "d5zBhhF6R1K4YrXgXZzLJjvq8WJQ4eY2W3n7oP5tH2k"
-};
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BElWQwBw0Zv8YQ8q-2p3aK9LzJ7mN1tT5xY7vU0iH3dC4rA6fG8hJ9kL2oM4nP7qS1tV3wX5z';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6';
 
 webpush.setVapidDetails(
     'mailto:donabrookies@example.com',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
 );
 
-console.log('🔔 Sistema de notificações push configurado');
+console.log('🔔 Sistema de notificações configurado!');
 
 // Middleware CORS CONFIGURADO - PERMITE TODOS OS DOMÍNIOS
 app.use(cors({
@@ -391,26 +389,6 @@ app.get("/diagnostico", async (req, res) => {
             };
         } catch (error) {
             resultados.tabelas.admin_credentials = {
-                existe: false,
-                erro: error.message
-            };
-        }
-
-        // TESTE: Verificar se tabela push_subscriptions existe
-        console.log('🔔 Testando tabela push_subscriptions...');
-        try {
-            const { data: subscriptions, error } = await supabase
-                .from('push_subscriptions')
-                .select('*')
-                .limit(1);
-
-            resultados.tabelas.push_subscriptions = {
-                existe: !error,
-                erro: error?.message,
-                quantidade: subscriptions?.length || 0
-            };
-        } catch (error) {
-            resultados.tabelas.push_subscriptions = {
                 existe: false,
                 erro: error.message
             };
@@ -921,134 +899,154 @@ app.post("/api/categories", async (req, res) => {
     }
 });
 
-// ===== SISTEMA DE NOTIFICAÇÕES PUSH =====
+// ===== NOVOS ENDPOINTS PARA NOTIFICAÇÕES PUSH =====
 
-// Gerenciar inscrições de notificações push
-app.post("/api/push/subscription", async (req, res) => {
+// Obter chave pública VAPID
+app.get("/api/notifications/public-key", (req, res) => {
+    res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Registrar subscription para notificações
+app.post("/api/notifications/subscribe", async (req, res) => {
     try {
-        const { subscription, action } = req.body;
+        const { subscription, deviceInfo } = req.body;
         
-        if (!subscription) {
-            return res.status(400).json({ error: "Subscription é obrigatória" });
+        if (!subscription || !subscription.endpoint) {
+            return res.status(400).json({ error: "Subscription inválida" });
         }
 
-        console.log(`🔔 ${action === 'subscribe' ? 'Nova inscrição' : 'Cancelamento'} de notificação push`);
+        console.log('📱 Nova subscription para notificações:', subscription.endpoint);
 
-        // Verificar se a tabela push_subscriptions existe, se não, criar
-        const { error: tableCheckError } = await supabase
+        // Salvar no Supabase
+        const { data, error } = await supabase
             .from('push_subscriptions')
-            .select('*')
-            .limit(1);
+            .upsert([{
+                endpoint: subscription.endpoint,
+                subscription_data: subscription,
+                device_info: deviceInfo || {},
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            }], {
+                onConflict: 'endpoint',
+                ignoreDuplicates: false
+            });
 
-        if (tableCheckError && tableCheckError.message.includes('does not exist')) {
-            console.log('📋 Criando tabela push_subscriptions...');
-            
-            // Criar tabela se não existir
-            const { error: createTableError } = await supabase.rpc('create_push_subscriptions_table');
-            
-            if (createTableError) {
-                console.error('❌ Erro ao criar tabela push_subscriptions:', createTableError);
-                // Continuar mesmo com erro na criação da tabela
-            }
+        if (error) {
+            console.error('❌ Erro ao salvar subscription:', error);
+            throw error;
         }
 
-        if (action === 'subscribe') {
-            // Inserir ou atualizar subscription
-            const { error } = await supabase
-                .from('push_subscriptions')
-                .upsert({
-                    endpoint: subscription.endpoint,
-                    subscription_data: subscription,
-                    created_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                }, {
-                    onConflict: 'endpoint'
-                });
-
-            if (error) {
-                console.error('❌ Erro ao salvar subscription:', error);
-                return res.status(500).json({ error: "Erro ao salvar subscription" });
-            }
-
-            console.log('✅ Subscription salva com sucesso');
-            res.json({ success: true, message: "Inscrição realizada com sucesso" });
-
-        } else if (action === 'unsubscribe') {
-            // Remover subscription
-            const { error } = await supabase
-                .from('push_subscriptions')
-                .delete()
-                .eq('endpoint', subscription.endpoint);
-
-            if (error) {
-                console.error('❌ Erro ao remover subscription:', error);
-                return res.status(500).json({ error: "Erro ao remover subscription" });
-            }
-
-            console.log('✅ Subscription removida com sucesso');
-            res.json({ success: true, message: "Inscrição cancelada com sucesso" });
-        }
-
+        console.log('✅ Subscription salva com sucesso!');
+        res.json({ success: true, message: "Inscrição para notificações salva" });
     } catch (error) {
-        console.error("❌ Erro no gerenciamento de subscription:", error);
-        res.status(500).json({ error: "Erro no processo de subscription" });
+        console.error("❌ Erro ao registrar subscription:", error);
+        res.status(500).json({ error: "Erro ao registrar subscription: " + error.message });
     }
 });
 
-// Enviar notificação para todos os usuários
-app.post("/api/push/send", async (req, res) => {
+// Remover subscription
+app.post("/api/notifications/unsubscribe", async (req, res) => {
+    try {
+        const { subscription } = req.body;
+        
+        if (!subscription || !subscription.endpoint) {
+            return res.status(400).json({ error: "Subscription inválida" });
+        }
+
+        console.log('🗑️ Removendo subscription:', subscription.endpoint);
+
+        const { error } = await supabase
+            .from('push_subscriptions')
+            .delete()
+            .eq('endpoint', subscription.endpoint);
+
+        if (error) {
+            console.error('❌ Erro ao remover subscription:', error);
+            throw error;
+        }
+
+        console.log('✅ Subscription removida com sucesso!');
+        res.json({ success: true, message: "Inscrição removida" });
+    } catch (error) {
+        console.error("❌ Erro ao remover subscription:", error);
+        res.status(500).json({ error: "Erro ao remover subscription: " + error.message });
+    }
+});
+
+// Enviar notificação para todos os usuários (Admin)
+app.post("/api/notifications/send", async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
             return res.status(401).json({ error: "Não autorizado" });
         }
         
-        const { title, message, url } = req.body;
+        const { title, message, icon, url } = req.body;
         
         if (!title || !message) {
             return res.status(400).json({ error: "Título e mensagem são obrigatórios" });
         }
 
-        console.log(`📤 Enviando notificação: "${title}"`);
+        console.log('📤 Enviando notificação para todos os usuários...');
+        console.log('📝 Título:', title);
+        console.log('💬 Mensagem:', message);
 
         // Buscar todas as subscriptions
-        const { data: subscriptions, error } = await supabase
+        const { data: subscriptions, error: fetchError } = await supabase
             .from('push_subscriptions')
             .select('*');
 
-        if (error) {
-            console.error('❌ Erro ao buscar subscriptions:', error);
-            throw error;
+        if (fetchError) {
+            console.error('❌ Erro ao buscar subscriptions:', fetchError);
+            throw fetchError;
         }
 
         if (!subscriptions || subscriptions.length === 0) {
             console.log('ℹ️ Nenhum usuário inscrito para notificações');
-            return res.json({ success: true, sent: 0, message: "Nenhum usuário inscrito" });
+            return res.json({ 
+                success: true, 
+                message: "Notificação criada, mas nenhum usuário inscrito",
+                sent: 0,
+                total: 0
+            });
         }
 
         console.log(`📨 Enviando para ${subscriptions.length} usuários...`);
 
-        const notificationPayload = {
+        const payload = JSON.stringify({
             title: title,
             body: message,
-            icon: '/icons/icon-192x192.png',
+            icon: icon || '/icons/icon-192x192.png',
             badge: '/icons/icon-192x192.png',
+            image: icon || '/icons/icon-192x192.png',
             data: {
                 url: url || '/',
                 timestamp: new Date().toISOString()
-            }
-        };
+            },
+            actions: [
+                {
+                    action: 'open',
+                    title: 'Abrir App'
+                },
+                {
+                    action: 'close',
+                    title: 'Fechar'
+                }
+            ]
+        });
+
+        let sentCount = 0;
+        const failedSubscriptions = [];
 
         // Enviar notificação para cada subscription
-        const sendPromises = subscriptions.map(async (sub) => {
+        for (const sub of subscriptions) {
             try {
-                await webpush.sendNotification(
-                    sub.subscription_data,
-                    JSON.stringify(notificationPayload)
-                );
-                return { success: true, endpoint: sub.endpoint };
+                await webpush.sendNotification(sub.subscription_data, payload);
+                sentCount++;
+                console.log(`✅ Notificação enviada para: ${sub.endpoint.substring(0, 50)}...`);
             } catch (error) {
-                console.error(`❌ Erro ao enviar para ${sub.endpoint}:`, error);
+                console.error(`❌ Erro ao enviar para ${sub.endpoint}:`, error.message);
+                failedSubscriptions.push(sub.endpoint);
                 
                 // Se a subscription é inválida, remover do banco
                 if (error.statusCode === 410 || error.statusCode === 404) {
@@ -1058,103 +1056,105 @@ app.post("/api/push/send", async (req, res) => {
                         .delete()
                         .eq('endpoint', sub.endpoint);
                 }
-                
-                return { success: false, endpoint: sub.endpoint, error: error.message };
             }
-        });
-
-        const results = await Promise.all(sendPromises);
-        const successfulSends = results.filter(r => r.success).length;
-        const failedSends = results.filter(r => !r.success).length;
-
-        console.log(`✅ Notificação enviada: ${successfulSends} sucessos, ${failedSends} falhas`);
-
-        // Registrar estatística da notificação
-        try {
-            await supabase
-                .from('notification_stats')
-                .insert({
-                    title: title,
-                    message: message,
-                    url: url,
-                    sent_count: successfulSends,
-                    total_subscribers: subscriptions.length,
-                    sent_at: new Date().toISOString()
-                });
-        } catch (statsError) {
-            console.error('⚠️ Erro ao salvar estatísticas:', statsError);
         }
+
+        // Salvar histórico da notificação
+        await supabase
+            .from('notification_history')
+            .insert([{
+                title: title,
+                message: message,
+                icon: icon,
+                url: url,
+                sent_count: sentCount,
+                total_subscriptions: subscriptions.length,
+                failed_count: failedSubscriptions.length,
+                created_at: new Date().toISOString()
+            }]);
+
+        console.log(`📊 Resumo: ${sentCount}/${subscriptions.length} notificações enviadas com sucesso`);
 
         res.json({ 
             success: true, 
-            sent: successfulSends,
+            message: `Notificação enviada para ${sentCount} de ${subscriptions.length} usuários`,
+            sent: sentCount,
             total: subscriptions.length,
-            failed: failedSends,
-            message: `Notificação enviada para ${successfulSends} usuários`
+            failed: failedSubscriptions.length
         });
-
     } catch (error) {
-        console.error("❌ Erro ao enviar notificação:", error);
-        res.status(500).json({ error: "Erro ao enviar notificação: " + error.message });
+        console.error("❌ Erro ao enviar notificações:", error);
+        res.status(500).json({ error: "Erro ao enviar notificações: " + error.message });
     }
 });
 
-// Obter estatísticas de notificações
-app.get("/api/push/stats", async (req, res) => {
+// Obter histórico de notificações (Admin)
+app.get("/api/notifications/history", async (req, res) => {
     try {
-        // Contar total de inscritos
-        const { count: totalSubscribers, error: countError } = await supabase
-            .from('push_subscriptions')
-            .select('*', { count: 'exact', head: true });
-
-        if (countError) {
-            console.error('❌ Erro ao contar subscribers:', countError);
-            throw countError;
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
         }
 
-        // Buscar estatísticas de notificações enviadas
-        const { data: stats, error: statsError } = await supabase
-            .from('notification_stats')
+        const { data: history, error } = await supabase
+            .from('notification_history')
             .select('*')
-            .order('sent_at', { ascending: false })
-            .limit(1);
+            .order('created_at', { ascending: false })
+            .limit(50);
 
-        let notificationsSent = 0;
-        let lastSent = null;
-
-        if (!statsError && stats && stats.length > 0) {
-            // Calcular total de notificações enviadas
-            const { data: allStats, error: allStatsError } = await supabase
-                .from('notification_stats')
-                .select('sent_count');
-
-            if (!allStatsError && allStats) {
-                notificationsSent = allStats.reduce((total, stat) => total + (stat.sent_count || 0), 0);
-            }
-
-            lastSent = stats[0].sent_at;
+        if (error) {
+            console.error('❌ Erro ao buscar histórico:', error);
+            throw error;
         }
+
+        res.json({ history: history || [] });
+    } catch (error) {
+        console.error("❌ Erro ao buscar histórico:", error);
+        res.status(500).json({ error: "Erro ao buscar histórico: " + error.message });
+    }
+});
+
+// Obter estatísticas de notificações (Admin)
+app.get("/api/notifications/stats", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+
+        // Total de subscriptions
+        const { data: subscriptions, error: subsError } = await supabase
+            .from('push_subscriptions')
+            .select('*');
+
+        if (subsError) throw subsError;
+
+        // Total de notificações enviadas
+        const { data: history, error: histError } = await supabase
+            .from('notification_history')
+            .select('sent_count, total_subscriptions');
+
+        if (histError) throw histError;
+
+        const totalSubscriptions = subscriptions?.length || 0;
+        const totalNotifications = history?.length || 0;
+        const totalSent = history?.reduce((sum, item) => sum + (item.sent_count || 0), 0) || 0;
 
         res.json({
-            success: true,
-            totalSubscribers: totalSubscribers || 0,
-            notificationsSent: notificationsSent,
-            lastSent: lastSent
+            totalSubscriptions,
+            totalNotifications,
+            totalSent,
+            deliveryRate: totalNotifications > 0 ? (totalSent / (totalSubscriptions * totalNotifications)) * 100 : 0
         });
-
     } catch (error) {
         console.error("❌ Erro ao buscar estatísticas:", error);
-        res.json({
-            success: true,
-            totalSubscribers: 0,
-            notificationsSent: 0,
-            lastSent: null
-        });
+        res.status(500).json({ error: "Erro ao buscar estatísticas: " + error.message });
     }
 });
 
 // Inicializar servidor
 console.log('✅ Backend Dona Brookies carregado com sucesso!');
+console.log('🔔 Sistema de notificações configurado!');
 console.log('🔧 Inicializando credenciais admin...');
 
 // Garantir credenciais admin ao iniciar
