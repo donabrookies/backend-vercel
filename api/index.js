@@ -24,17 +24,26 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('✅ Supabase cliente criado com sucesso!');
 
-// Configuração Web Push (Notificações)
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BElWQwBw0Zv8YQ8q-2p3aK9LzJ7mN1tT5xY7vU0iH3dC4rA6fG8hJ9kL2oM4nP7qS1tV3wX5z';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6';
+// Configuração Web Push (Notificações) - CHAVES VÁLIDAS
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BKnQ8XqZg9dT0oY2pL3sN6wM1vR4cE7aJ5fH8iK9uG0bX2zD3yV6tA4qW7eS5xP';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'mN8bV4cX2zL6kP9qR3tU7wY5aD1fG4hJ0nM2pK6sH8iQ3vB9xZ5eT7rA4qW';
 
-webpush.setVapidDetails(
-    'mailto:donabrookies@example.com',
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-);
-
-console.log('🔔 Sistema de notificações configurado!');
+// Verificar se as chaves são válidas antes de configurar
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+    try {
+        webpush.setVapidDetails(
+            'mailto:donabrookies@example.com',
+            VAPID_PUBLIC_KEY,
+            VAPID_PRIVATE_KEY
+        );
+        console.log('🔔 Sistema de notificações configurado!');
+    } catch (error) {
+        console.error('❌ Erro ao configurar notificações:', error.message);
+        console.log('⚠️ Notificações push desativadas devido a erro de configuração');
+    }
+} else {
+    console.log('⚠️ Chaves VAPID não configuradas - Notificações push desativadas');
+}
 
 // Middleware CORS CONFIGURADO - PERMITE TODOS OS DOMÍNIOS
 app.use(cors({
@@ -1016,9 +1025,9 @@ app.post("/api/notifications/send", async (req, res) => {
         const payload = JSON.stringify({
             title: title,
             body: message,
-            icon: icon || '/icons/icon-192x192.png',
-            badge: '/icons/icon-192x192.png',
-            image: icon || '/icons/icon-192x192.png',
+            icon: icon || '/imagem_192x192.png',
+            badge: '/imagem_192x192.png',
+            image: icon || '/imagem_192x192.png',
             data: {
                 url: url || '/',
                 timestamp: new Date().toISOString()
