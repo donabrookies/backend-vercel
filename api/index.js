@@ -133,6 +133,25 @@ function normalizeProducts(products) {
     });
 }
 
+// Normalizar cupons
+function normalizeCoupons(coupons) {
+    if (!Array.isArray(coupons)) return [];
+    
+    return coupons.map(coupon => {
+        if (coupon && typeof coupon === 'object' && coupon.code) {
+            return {
+                id: coupon.id || Math.random().toString(36).substr(2, 9),
+                code: coupon.code,
+                description: coupon.description || `Cupom ${coupon.code}`,
+                status: coupon.status || 'active',
+                type: coupon.type || 'free_shipping',
+                created_at: coupon.created_at || new Date().toISOString()
+            };
+        }
+        return null;
+    }).filter(coupon => coupon !== null);
+}
+
 // Verificar autenticação
 function checkAuth(token) {
     return token === "authenticated_admin_token";
@@ -399,6 +418,26 @@ app.get("/diagnostico", async (req, res) => {
             };
         }
 
+        // TESTE: Verificar se tabela coupons existe
+        console.log('🎫 Testando tabela coupons...');
+        try {
+            const { data: coupons, error } = await supabase
+                .from('coupons')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.coupons = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: coupons?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.coupons = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
         console.log('📊 Diagnóstico completo:', resultados);
         res.json(resultados);
 
@@ -561,6 +600,112 @@ app.get("/api/categories", async (req, res) => {
     } catch (error) {
         console.error('❌ Erro geral em /api/categories:', error);
         res.json({ categories: [] });
+    }
+});
+
+// NOVO ENDPOINT: Buscar cupons
+app.get("/api/coupons", async (req, res) => {
+    try {
+        console.log('🔄 Buscando cupons do Supabase...');
+        
+        const { data: coupons, error } = await supabase
+            .from('coupons')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('❌ Erro ao buscar cupons:', error.message);
+            
+            // Se tabela não existe, retornar cupons de exemplo
+            if (error.message.includes('does not exist')) {
+                console.log('🎫 Tabela coupons não existe, retornando exemplo...');
+                const cuponsExemplo = [
+                    {
+                        id: 1,
+                        code: "APP10",
+                        description: "Cupom para app - Frete grátis",
+                        status: "active",
+                        type: "free_shipping",
+                        created_at: new Date().toISOString()
+                    }
+                ];
+                return res.json({ coupons: cuponsExemplo });
+            }
+            
+            return res.json({ coupons: [] });
+        }
+
+        console.log(`✅ ${coupons?.length || 0} cupons encontrados`);
+        
+        // Se não há cupons, retornar exemplo
+        if (!coupons || coupons.length === 0) {
+            console.log('🎫 Nenhum cupom no banco, retornando exemplo...');
+            const cuponsExemplo = [
+                {
+                    id: 1,
+                    code: "APP10",
+                    description: "Cupom para app - Frete grátis",
+                    status: "active",
+                    type: "free_shipping",
+                    created_at: new Date().toISOString()
+                }
+            ];
+            return res.json({ coupons: cuponsExemplo });
+        }
+
+        const normalizedCoupons = normalizeCoupons(coupons);
+        res.json({ coupons: normalizedCoupons });
+        
+    } catch (error) {
+        console.error('❌ Erro geral em /api/coupons:', error);
+        res.json({ coupons: [] });
+    }
+});
+
+// NOVO ENDPOINT: Salvar cupons
+app.post("/api/coupons", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+        
+        const { coupons } = req.body;
+        console.log(`💾 Salvando ${coupons?.length || 0} cupons...`);
+        
+        const normalizedCoupons = normalizeCoupons(coupons);
+
+        if (normalizedCoupons.length === 0) {
+            return res.status(400).json({ error: "Nenhum cupom fornecido" });
+        }
+
+        // Limpar tabela e inserir novos cupons
+        const { error: deleteError } = await supabase
+            .from('coupons')
+            .delete()
+            .neq('id', 0);
+
+        if (deleteError && !deleteError.message.includes('No rows found')) {
+            console.error('❌ Erro ao deletar cupons antigos:', deleteError);
+            throw deleteError;
+        }
+
+        if (normalizedCoupons.length > 0) {
+            const { error: insertError } = await supabase
+                .from('coupons')
+                .insert(normalizedCoupons);
+
+            if (insertError) {
+                console.error('❌ Erro ao inserir cupons:', insertError);
+                throw insertError;
+            }
+        }
+
+        console.log('✅ Cupons salvos com sucesso!');
+        res.json({ success: true, message: `${normalizedCoupons.length} cupons salvos` });
+    } catch (error) {
+        console.error("❌ Erro ao salvar cupons:", error);
+        res.status(500).json({ error: "Erro ao salvar cupons: " + error.message });
     }
 });
 
@@ -1248,6 +1393,7 @@ app.get("/api/notifications/stats", async (req, res) => {
 // Inicializar servidor
 console.log('✅ Backend Dona Brookies carregado com sucesso!');
 console.log('🔔 Sistema de notificações configurado!');
+console.log('🎫 Sistema de cupons configurado!');
 console.log('🔧 Inicializando credenciais admin...');
 
 // Garantir credenciais admin ao iniciar
