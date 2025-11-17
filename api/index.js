@@ -115,6 +115,20 @@ function normalizeProducts(products) {
     });
 }
 
+// Normalizar cupons
+function normalizeCoupons(coupons) {
+    if (!Array.isArray(coupons)) return [];
+    
+    return coupons.map(coupon => ({
+        id: coupon.id,
+        code: coupon.code,
+        description: coupon.description,
+        status: coupon.status,
+        type: coupon.type,
+        created_at: coupon.created_at
+    }));
+}
+
 // Verificar autenticação
 function checkAuth(token) {
     return token === "authenticated_admin_token";
@@ -361,6 +375,26 @@ app.get("/diagnostico", async (req, res) => {
             };
         }
 
+        // TESTE: Verificar se tabela coupons existe
+        console.log('🎫 Testando tabela coupons...');
+        try {
+            const { data: coupons, error } = await supabase
+                .from('coupons')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.coupons = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: coupons?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.coupons = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
         // TESTE: Verificar se tabela admin_credentials existe
         console.log('🔐 Testando tabela admin_credentials...');
         try {
@@ -543,6 +577,73 @@ app.get("/api/categories", async (req, res) => {
     } catch (error) {
         console.error('❌ Erro geral em /api/categories:', error);
         res.json({ categories: [] });
+    }
+});
+
+// Buscar cupons - COM FALLBACK SE TABELA NÃO EXISTIR
+app.get("/api/coupons", async (req, res) => {
+    try {
+        console.log('🔄 Buscando cupons do Supabase...');
+        
+        const { data: coupons, error } = await supabase
+            .from('coupons')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('❌ Erro ao buscar cupons:', error.message);
+            
+            // Se tabela não existe, retornar cupons de exemplo
+            if (error.message.includes('does not exist')) {
+                console.log('🎫 Tabela coupons não existe, retornando exemplo...');
+                const cuponsExemplo = [
+                    {
+                        id: 1,
+                        code: "APP10",
+                        description: "Cupom para app - Frete grátis",
+                        status: "active",
+                        type: "free_shipping",
+                        created_at: new Date().toISOString()
+                    },
+                    {
+                        id: 2,
+                        code: "PRIMEIRA",
+                        description: "Primeira compra - Frete grátis",
+                        status: "active",
+                        type: "free_shipping",
+                        created_at: new Date().toISOString()
+                    }
+                ];
+                return res.json({ coupons: cuponsExemplo });
+            }
+            
+            return res.json({ coupons: [] });
+        }
+
+        console.log(`✅ ${coupons?.length || 0} cupons encontrados`);
+        
+        // Se não há cupons, retornar exemplo
+        if (!coupons || coupons.length === 0) {
+            console.log('🎫 Nenhum cupom no banco, retornando exemplo...');
+            const cuponsExemplo = [
+                {
+                    id: 1,
+                    code: "APP10",
+                    description: "Cupom para app - Frete grátis",
+                    status: "active",
+                    type: "free_shipping",
+                    created_at: new Date().toISOString()
+                }
+            ];
+            return res.json({ coupons: cuponsExemplo });
+        }
+
+        const normalizedCoupons = normalizeCoupons(coupons);
+        res.json({ coupons: normalizedCoupons });
+        
+    } catch (error) {
+        console.error('❌ Erro geral em /api/coupons:', error);
+        res.json({ coupons: [] });
     }
 });
 
@@ -763,6 +864,81 @@ app.post("/api/categories/add", async (req, res) => {
     } catch (error) {
         console.error("❌ Erro ao adicionar categoria:", error);
         res.status(500).json({ error: "Erro ao adicionar categoria: " + error.message });
+    }
+});
+
+// Adicionar cupom
+app.post("/api/coupons/add", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+        
+        const { coupon } = req.body;
+        
+        if (!coupon || !coupon.code) {
+            return res.status(400).json({ error: "Dados do cupom inválidos" });
+        }
+
+        console.log(`➕ Adicionando cupom: ${coupon.code}`);
+
+        const { data, error } = await supabase
+            .from('coupons')
+            .upsert([{
+                code: coupon.code,
+                description: coupon.description,
+                status: coupon.status || 'active',
+                type: coupon.type || 'free_shipping'
+            }], {
+                onConflict: 'code',
+                ignoreDuplicates: false
+            });
+
+        if (error) {
+            console.error('❌ Erro ao adicionar cupom:', error);
+            throw error;
+        }
+
+        console.log('✅ Cupom adicionado com sucesso:', coupon.code);
+        res.json({ success: true, message: `Cupom "${coupon.code}" adicionado` });
+    } catch (error) {
+        console.error("❌ Erro ao adicionar cupom:", error);
+        res.status(500).json({ error: "Erro ao adicionar cupom: " + error.message });
+    }
+});
+
+// Excluir cupom
+app.post("/api/coupons/delete", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+        
+        const { couponId } = req.body;
+        
+        if (!couponId) {
+            return res.status(400).json({ error: "ID do cupom é obrigatório" });
+        }
+
+        console.log(`🗑️ Excluindo cupom: ${couponId}`);
+
+        const { error: deleteError } = await supabase
+            .from('coupons')
+            .delete()
+            .eq('id', couponId);
+
+        if (deleteError) {
+            console.error('❌ Erro ao excluir cupom:', deleteError);
+            throw deleteError;
+        }
+
+        console.log('✅ Cupom excluído com sucesso:', couponId);
+        res.json({ success: true, message: `Cupom excluído com sucesso!` });
+    } catch (error) {
+        console.error("❌ Erro ao excluir cupom:", error);
+        res.status(500).json({ error: "Erro ao excluir cupom: " + error.message });
     }
 });
 
