@@ -129,6 +129,21 @@ function normalizeCoupons(coupons) {
     }));
 }
 
+// Normalizar histórico de vendas
+function normalizeSalesHistory(salesHistory) {
+    if (!Array.isArray(salesHistory)) return [];
+    
+    return salesHistory.map(sale => ({
+        id: sale.id,
+        date: sale.date,
+        day_of_week: sale.day_of_week,
+        items: sale.items || [],
+        total_quantity: sale.total_quantity || 0,
+        total_value: parseFloat(sale.total_value) || 0,
+        created_at: sale.created_at
+    }));
+}
+
 // Verificar autenticação
 function checkAuth(token) {
     return token === "authenticated_admin_token";
@@ -415,6 +430,26 @@ app.get("/diagnostico", async (req, res) => {
             };
         }
 
+        // TESTE: Verificar se tabela sales_history existe
+        console.log('📊 Testando tabela sales_history...');
+        try {
+            const { data: salesHistory, error } = await supabase
+                .from('sales_history')
+                .select('*')
+                .limit(1);
+
+            resultados.tabelas.sales_history = {
+                existe: !error,
+                erro: error?.message,
+                quantidade: salesHistory?.length || 0
+            };
+        } catch (error) {
+            resultados.tabelas.sales_history = {
+                existe: false,
+                erro: error.message
+            };
+        }
+
         console.log('📊 Diagnóstico completo:', resultados);
         res.json(resultados);
 
@@ -644,6 +679,136 @@ app.get("/api/coupons", async (req, res) => {
     } catch (error) {
         console.error('❌ Erro geral em /api/coupons:', error);
         res.json({ coupons: [] });
+    }
+});
+
+// NOVO ENDPOINT: Buscar histórico de vendas
+app.get("/api/sales-history", async (req, res) => {
+    try {
+        console.log('🔄 Buscando histórico de vendas do Supabase...');
+        
+        const { data: salesHistory, error } = await supabase
+            .from('sales_history')
+            .select('*')
+            .order('date', { ascending: false });
+
+        if (error) {
+            console.error('❌ Erro ao buscar histórico de vendas:', error.message);
+            
+            // Se tabela não existe, retornar vazio
+            if (error.message.includes('does not exist')) {
+                console.log('📊 Tabela sales_history não existe, retornando vazio...');
+                return res.json({ salesHistory: [] });
+            }
+            
+            return res.json({ salesHistory: [] });
+        }
+
+        console.log(`✅ ${salesHistory?.length || 0} registros de vendas encontrados`);
+        
+        const normalizedSalesHistory = normalizeSalesHistory(salesHistory || []);
+        res.json({ salesHistory: normalizedSalesHistory });
+        
+    } catch (error) {
+        console.error('❌ Erro geral em /api/sales-history:', error);
+        res.json({ salesHistory: [] });
+    }
+});
+
+// NOVO ENDPOINT: Salvar venda no histórico
+app.post("/api/sales-history", async (req, res) => {
+    try {
+        const { saleData } = req.body;
+        
+        console.log('💾 Salvando venda no histórico:', saleData?.date);
+        
+        if (!saleData || !saleData.date) {
+            return res.status(400).json({ error: "Dados da venda inválidos" });
+        }
+
+        // Verificar se já existe uma venda para esta data
+        const { data: existingSale, error: checkError } = await supabase
+            .from('sales_history')
+            .select('*')
+            .eq('date', saleData.date)
+            .single();
+
+        if (checkError && checkError.code !== 'PGRST116') {
+            console.error('❌ Erro ao verificar venda existente:', checkError);
+        }
+
+        let result;
+        
+        if (existingSale) {
+            // Atualizar venda existente
+            console.log('📝 Atualizando venda existente para:', saleData.date);
+            
+            const updatedItems = [...(existingSale.items || []), ...(saleData.items || [])];
+            const totalQuantity = updatedItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+            const totalValue = updatedItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+            
+            result = await supabase
+                .from('sales_history')
+                .update({
+                    items: updatedItems,
+                    total_quantity: totalQuantity,
+                    total_value: totalValue,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('date', saleData.date);
+        } else {
+            // Criar nova venda
+            console.log('➕ Criando nova venda para:', saleData.date);
+            
+            const totalQuantity = saleData.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+            const totalValue = saleData.items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+            
+            result = await supabase
+                .from('sales_history')
+                .insert([{
+                    date: saleData.date,
+                    day_of_week: saleData.dayOfWeek,
+                    items: saleData.items,
+                    total_quantity: totalQuantity,
+                    total_value: totalValue
+                }]);
+        }
+
+        if (result.error) {
+            console.error('❌ Erro ao salvar venda:', result.error);
+            throw result.error;
+        }
+
+        console.log('✅ Venda salva no histórico com sucesso!');
+        res.json({ success: true, message: "Venda registrada no histórico" });
+        
+    } catch (error) {
+        console.error("❌ Erro ao salvar histórico de vendas:", error);
+        res.status(500).json({ error: "Erro ao salvar histórico de vendas: " + error.message });
+    }
+});
+
+// NOVO ENDPOINT: Limpar histórico de vendas
+app.post("/api/sales-history/reset", async (req, res) => {
+    try {
+        console.log('🗑️ Limpando histórico de vendas...');
+        
+        const { error } = await supabase
+            .from('sales_history')
+            .delete()
+            .neq('id', 0);
+
+        if (error) {
+            console.error('❌ Erro ao limpar histórico:', error);
+            throw error;
+        }
+
+        console.log('✅ Histórico de vendas limpo com sucesso!');
+        res.json({ success: true, message: "Histórico de vendas limpo" });
+        
+    } catch (error) {
+        console.error("❌ Erro ao limpar histórico de vendas:", error);
+        res.status(500).json({ error: "Erro ao limpar histórico de vendas: " + error.message });
     }
 });
 
