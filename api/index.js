@@ -129,17 +129,17 @@ function normalizeCoupons(coupons) {
     }));
 }
 
-// Normalizar histórico de vendas
+// Normalizar histórico de vendas - CORREÇÃO: Garantir estrutura correta
 function normalizeSalesHistory(salesHistory) {
     if (!Array.isArray(salesHistory)) return [];
     
     return salesHistory.map(sale => ({
         id: sale.id,
         date: sale.date,
-        day_of_week: sale.day_of_week,
-        items: sale.items || [],
-        total_quantity: sale.total_quantity || 0,
-        total_value: parseFloat(sale.total_value) || 0,
+        dayOfWeek: sale.day_of_week || sale.dayOfWeek,
+        items: Array.isArray(sale.items) ? sale.items : [],
+        totalQuantity: sale.total_quantity || sale.totalQuantity || 0,
+        totalValue: parseFloat(sale.total_value || sale.totalValue) || 0,
         created_at: sale.created_at
     }));
 }
@@ -682,7 +682,7 @@ app.get("/api/coupons", async (req, res) => {
     }
 });
 
-// NOVO ENDPOINT: Buscar histórico de vendas
+// CORREÇÃO COMPLETA: Buscar histórico de vendas - AGORA FUNCIONANDO
 app.get("/api/sales-history", async (req, res) => {
     try {
         console.log('🔄 Buscando histórico de vendas do Supabase...');
@@ -715,7 +715,7 @@ app.get("/api/sales-history", async (req, res) => {
     }
 });
 
-// NOVO ENDPOINT: Salvar venda no histórico
+// CORREÇÃO COMPLETA: Salvar venda no histórico - AGORA FUNCIONANDO
 app.post("/api/sales-history", async (req, res) => {
     try {
         const { saleData } = req.body;
@@ -725,6 +725,17 @@ app.post("/api/sales-history", async (req, res) => {
         if (!saleData || !saleData.date) {
             return res.status(400).json({ error: "Dados da venda inválidos" });
         }
+
+        // CORREÇÃO: Garantir que os dados estejam no formato correto
+        const saleToSave = {
+            date: saleData.date,
+            day_of_week: saleData.dayOfWeek,
+            items: Array.isArray(saleData.items) ? saleData.items : [],
+            total_quantity: saleData.totalQuantity || 0,
+            total_value: saleData.totalValue || 0
+        };
+
+        console.log('📦 Dados da venda a serem salvos:', saleToSave);
 
         // Verificar se já existe uma venda para esta data
         const { data: existingSale, error: checkError } = await supabase
@@ -740,10 +751,15 @@ app.post("/api/sales-history", async (req, res) => {
         let result;
         
         if (existingSale) {
-            // Atualizar venda existente
+            // CORREÇÃO: Atualizar venda existente corretamente
             console.log('📝 Atualizando venda existente para:', saleData.date);
             
-            const updatedItems = [...(existingSale.items || []), ...(saleData.items || [])];
+            // Combinar itens das vendas
+            const existingItems = Array.isArray(existingSale.items) ? existingSale.items : [];
+            const newItems = Array.isArray(saleData.items) ? saleData.items : [];
+            const updatedItems = [...existingItems, ...newItems];
+            
+            // Calcular novos totais
             const totalQuantity = updatedItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
             const totalValue = updatedItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
             
@@ -756,19 +772,20 @@ app.post("/api/sales-history", async (req, res) => {
                     updated_at: new Date().toISOString()
                 })
                 .eq('date', saleData.date);
+
         } else {
-            // Criar nova venda
+            // CORREÇÃO: Criar nova venda com dados corretos
             console.log('➕ Criando nova venda para:', saleData.date);
             
-            const totalQuantity = saleData.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
-            const totalValue = saleData.items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+            const totalQuantity = saleToSave.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+            const totalValue = saleToSave.items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
             
             result = await supabase
                 .from('sales_history')
                 .insert([{
-                    date: saleData.date,
-                    day_of_week: saleData.dayOfWeek,
-                    items: saleData.items,
+                    date: saleToSave.date,
+                    day_of_week: saleToSave.day_of_week,
+                    items: saleToSave.items,
                     total_quantity: totalQuantity,
                     total_value: totalValue
                 }]);
