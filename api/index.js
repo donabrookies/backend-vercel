@@ -1010,7 +1010,7 @@ app.post("/api/orders/update-stock", async (req, res) => {
 });
 
 // Adicionar categoria
-app.post("/api/categories/add", async (req, res) =>{
+app.post("/api/categories/add", async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !checkAuth(authHeader.replace("Bearer ", ""))) {
