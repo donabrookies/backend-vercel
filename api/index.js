@@ -149,6 +149,78 @@ function checkAuth(token) {
     return token === "authenticated_admin_token";
 }
 
+// NOVO ENDPOINT: Enviar mensagem WhatsApp via proxy
+app.post("/api/whatsapp/send", async (req, res) => {
+    try {
+        const { token, payload } = req.body;
+        
+        console.log('📤 Recebendo solicitação para enviar mensagem WhatsApp...');
+        
+        if (!token || !payload) {
+            return res.status(400).json({ error: "Token e payload são obrigatórios" });
+        }
+        
+        if (!payload.number || !payload.body) {
+            return res.status(400).json({ error: "Número e corpo da mensagem são obrigatórios" });
+        }
+        
+        console.log('📱 Enviando mensagem para:', payload.number);
+        console.log('📝 Conteúdo (início):', payload.body.substring(0, 100));
+        
+        // Enviar mensagem diretamente para a API do IngaJa
+        const response = await fetch('https://talkapi.ingaja.com.br/api/messages/send', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        const responseText = await response.text();
+        console.log('📨 Resposta da API IngaJa:', response.status, responseText);
+        
+        if (!response.ok) {
+            console.error('❌ Erro na API IngaJa:', response.status, responseText);
+            
+            // Tentar extrair informações do erro
+            let errorMessage = `HTTP ${response.status}: `;
+            try {
+                const errorData = JSON.parse(responseText);
+                errorMessage += errorData.message || errorData.error || responseText;
+            } catch {
+                errorMessage += responseText;
+            }
+            
+            return res.status(response.status).json({ 
+                success: false, 
+                error: errorMessage 
+            });
+        }
+        
+        let responseData;
+        try {
+            responseData = JSON.parse(responseText);
+        } catch {
+            responseData = { message: "Mensagem enviada com sucesso" };
+        }
+        
+        console.log('✅ Mensagem WhatsApp enviada com sucesso!');
+        res.json({ 
+            success: true, 
+            data: responseData,
+            message: "Mensagem enviada com sucesso" 
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao enviar mensagem WhatsApp:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: "Erro ao conectar com serviço WhatsApp: " + error.message 
+        });
+    }
+});
+
 // NOVA FUNÇÃO: Atualização de estoque OTIMIZADA e CONFIÁVEL
 async function updateStockForOrder(items) {
     try {
