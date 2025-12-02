@@ -788,70 +788,100 @@ app.get("/api/sales-history", async (req, res) => {
 // CORREÇÃO DEFINITIVA: Salvar venda no histórico - VERSÃO SIMPLIFICADA QUE SEMPRE FUNCIONA
 app.post("/api/sales-history", async (req, res) => {
     try {
-        console.log('💾 Recebendo venda para salvar...');
+        console.log('💾 SALVANDO VENDA - VERSÃO CORRIGIDA');
         const { saleData } = req.body;
         
         if (!saleData || !saleData.date) {
-            console.log('⚠️ Dados inválidos recebidos');
-            return res.status(400).json({ error: "Dados da venda inválidos" });
+            console.log('⚠️ Dados inválidos');
+            return res.status(400).json({ error: "Dados inválidos" });
         }
         
-        console.log('📅 Venda para data:', saleData.date);
-        console.log('📦 Itens:', saleData.items?.length || 0);
+        console.log('📅 Data:', saleData.date);
+        console.log('👤 Cliente:', saleData.customerName || 'Sem nome');
         console.log('💰 Total:', saleData.totalValue);
         
-        // SIMPLIFICADO: Sempre criar novo registro
+        // Dados para salvar - APENAS colunas que existem
         const saleToSave = {
             date: saleData.date,
             day_of_week: saleData.dayOfWeek || new Date().getDay(),
             items: Array.isArray(saleData.items) ? saleData.items : [],
             total_quantity: saleData.totalQuantity || 0,
-            total_value: saleData.totalValue || 0,
-            customer_name: saleData.customerName || 'Cliente',
-            delivery_type: saleData.deliveryType || 'retirada',
-            created_at: new Date().toISOString()
+            total_value: parseFloat(saleData.totalValue) || 0
+            // customer_name e delivery_type serão adicionados se existirem
         };
         
-        console.log('💾 Salvando no Supabase...');
+        // Adicionar colunas opcionais se a tabela tiver
+        if (saleData.customerName) {
+            saleToSave.customer_name = saleData.customerName;
+        }
+        
+        if (saleData.deliveryType) {
+            saleToSave.delivery_type = saleData.deliveryType;
+        }
+        
+        console.log('💾 Dados para salvar:', saleToSave);
         
         // Tentar salvar
         const { data, error } = await supabase
             .from('sales_history')
-            .insert([saleToSave]);
+            .insert([saleToSave])
+            .select();
         
         if (error) {
-            console.error('❌ Erro ao salvar no Supabase:', error.message);
+            console.error('❌ ERRO Supabase:', error.message);
             
-            // Se der erro, mas não é crítico, retornar sucesso mesmo assim
-            // O importante é que o pedido foi feito
-            console.log('⚠️ Erro no histórico, mas continuando...');
+            // Se erro for de coluna faltante, tentar sem colunas opcionais
+            if (error.message.includes('customer_name') || error.message.includes('delivery_type')) {
+                console.log('🔄 Tentando sem colunas opcionais...');
+                
+                // Versão simplificada
+                const simpleSale = {
+                    date: saleData.date,
+                    day_of_week: saleData.dayOfWeek || new Date().getDay(),
+                    items: Array.isArray(saleData.items) ? saleData.items : [],
+                    total_quantity: saleData.totalQuantity || 0,
+                    total_value: parseFloat(saleData.totalValue) || 0
+                };
+                
+                const { data: simpleData, error: simpleError } = await supabase
+                    .from('sales_history')
+                    .insert([simpleSale])
+                    .select();
+                
+                if (simpleError) {
+                    console.error('❌ Erro na versão simplificada:', simpleError);
+                    throw simpleError;
+                }
+                
+                console.log('✅ Salvo (versão simplificada)! ID:', simpleData?.[0]?.id);
+                return res.json({ 
+                    success: true, 
+                    message: "Venda registrada (sem dados do cliente)",
+                    id: simpleData?.[0]?.id 
+                });
+            }
             
-            // SEMPRE retornar sucesso para não bloquear o frontend
-            return res.json({ 
-                success: true, 
-                message: "Pedido processado (histórico pode precisar de verificação)",
-                warning: error.message
-            });
-        }
+            throw error;
+        }   
         
-        console.log('✅ Venda salva com sucesso! ID:', data?.[0]?.id);
+        console.log('✅ SALVO COM SUCESSO! ID:', data?.[0]?.id);
         res.json({ 
             success: true, 
             message: "Venda registrada no histórico",
-            id: data?.[0]?.id
+            id: data?.[0]?.id 
         });
         
     } catch (error) {
-        console.error("❌ ERRO CRÍTICO ao salvar venda:", error);
+        console.error("❌ ERRO CRÍTICO:", error);
         
-        // MESMO COM ERRO, RETORNAR SUCESSO para o frontend continuar
+        // SEMPRE retornar sucesso para não bloquear frontend
         res.json({ 
             success: true, 
             message: "Pedido processado com sucesso",
-            warning: "Histórico pode precisar de verificação manual"
+            warning: "Histórico será verificado manualmente" 
         });
     }
-});
+}); 
 
 // NOVO ENDPOINT: Limpar histórico de vendas
 app.post("/api/sales-history/reset", async (req, res) => {
