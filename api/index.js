@@ -735,7 +735,7 @@ app.get("/api/coupons", async (req, res) => {
             const cuponsExemplo = [
                 {
                     id: 1,
-                    code: "APP10",
+                        code: "APP10",
                     description: "Cupom para app - Frete grátis",
                     status: "active",
                     type: "free_shipping",
