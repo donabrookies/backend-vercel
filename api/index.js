@@ -130,18 +130,24 @@ function normalizeCoupons(coupons) {
 }
 
 // Normalizar histórico de vendas - CORREÇÃO: Garantir estrutura correta
+// Normalizar histórico de vendas - CORREÇÃO COMPLETA
 function normalizeSalesHistory(salesHistory) {
     if (!Array.isArray(salesHistory)) return [];
     
-    return salesHistory.map(sale => ({
-        id: sale.id,
-        date: sale.date,
-        dayOfWeek: sale.day_of_week || sale.dayOfWeek,
-        items: Array.isArray(sale.items) ? sale.items : [],
-        totalQuantity: sale.total_quantity || sale.totalQuantity || 0,
-        totalValue: parseFloat(sale.total_value || sale.totalValue) || 0,
-        created_at: sale.created_at
-    }));
+    return salesHistory.map(sale => {
+        // Garantir que todos os campos existem
+        return {
+            id: sale.id,
+            date: sale.date || new Date().toLocaleDateString('pt-BR'),
+            dayOfWeek: sale.day_of_week || sale.dayOfWeek || new Date().getDay(),
+            items: Array.isArray(sale.items) ? sale.items : [],
+            totalQuantity: sale.total_quantity || sale.totalQuantity || 0,
+            totalValue: parseFloat(sale.total_value || sale.totalValue) || 0,
+            customer_name: sale.customer_name || sale.customerName || '',
+            delivery_type: sale.delivery_type || sale.deliveryType || '',
+            created_at: sale.created_at || new Date().toISOString()
+        };
+    });
 }
 
 // Verificar autenticação
