@@ -130,7 +130,6 @@ function normalizeCoupons(coupons) {
 }
 
 // Normalizar histórico de vendas - CORREÇÃO: Garantir estrutura correta
-// Normalizar histórico de vendas - CORREÇÃO COMPLETA
 function normalizeSalesHistory(salesHistory) {
     if (!Array.isArray(salesHistory)) return [];
     
@@ -143,6 +142,8 @@ function normalizeSalesHistory(salesHistory) {
             items: Array.isArray(sale.items) ? sale.items : [],
             totalQuantity: sale.total_quantity || sale.totalQuantity || 0,
             totalValue: parseFloat(sale.total_value || sale.totalValue) || 0,
+            // CORREÇÃO: Adicionar campo para valor dos produtos sem entrega
+            productsValue: parseFloat(sale.products_value || sale.productsValue || sale.total_value || sale.totalValue) || 0,
             customer_name: sale.customer_name || sale.customerName || '',
             delivery_type: sale.delivery_type || sale.deliveryType || '',
             created_at: sale.created_at || new Date().toISOString()
@@ -741,7 +742,7 @@ app.get("/api/coupons", async (req, res) => {
             const cuponsExemplo = [
                 {
                     id: 1,
-                        code: "APP10",
+                    code: "APP10",
                     description: "Cupom para app - Frete grátis",
                     status: "active",
                     type: "free_shipping",
@@ -804,7 +805,11 @@ app.post("/api/sales-history", async (req, res) => {
         
         console.log('📅 Data:', saleData.date);
         console.log('👤 Cliente:', saleData.customerName || 'Sem nome');
-        console.log('💰 Total:', saleData.totalValue);
+        console.log('💰 Total produtos:', saleData.productsValue || saleData.totalValue);
+        console.log('🚚 Total com entrega:', saleData.totalValue);
+        
+        // CALCULAR VALOR DOS PRODUTOS SEM ENTREGA
+        const productsValue = saleData.productsValue || saleData.totalValue;
         
         // Dados para salvar - APENAS colunas que existem
         const saleToSave = {
@@ -812,7 +817,9 @@ app.post("/api/sales-history", async (req, res) => {
             day_of_week: saleData.dayOfWeek || new Date().getDay(),
             items: Array.isArray(saleData.items) ? saleData.items : [],
             total_quantity: saleData.totalQuantity || 0,
-            total_value: parseFloat(saleData.totalValue) || 0
+            total_value: parseFloat(saleData.totalValue) || 0,
+            // NOVO CAMPO: Valor dos produtos sem entrega
+            products_value: parseFloat(productsValue) || 0
             // customer_name e delivery_type serão adicionados se existirem
         };
         
@@ -837,7 +844,7 @@ app.post("/api/sales-history", async (req, res) => {
             console.error('❌ ERRO Supabase:', error.message);
             
             // Se erro for de coluna faltante, tentar sem colunas opcionais
-            if (error.message.includes('customer_name') || error.message.includes('delivery_type')) {
+            if (error.message.includes('customer_name') || error.message.includes('delivery_type') || error.message.includes('products_value')) {
                 console.log('🔄 Tentando sem colunas opcionais...');
                 
                 // Versão simplificada
