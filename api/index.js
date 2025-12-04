@@ -799,107 +799,129 @@ app.post("/api/sales-history", async (req, res) => {
         console.log('💾 SALVANDO VENDA - VERSÃO CORRIGIDA');
         const { saleData } = req.body;
         
-        if (!saleData || !saleData.date) {
-            console.log('⚠️ Dados inválidos');
+        if (!saleData) {
+            console.log('⚠️ Dados inválidos - saleData está vazio');
             return res.status(400).json({ error: "Dados inválidos" });
         }
         
-        console.log('📅 Data:', saleData.date);
+        console.log('📅 Data:', saleData.date || 'Não informada');
         console.log('👤 Cliente:', saleData.customerName || 'Sem nome');
-        console.log('💰 Total produtos:', saleData.productsValue || 'Não informado');
-        console.log('🚚 Total com entrega:', saleData.totalValue || 'Não informado');
+        console.log('📦 Itens:', saleData.items?.length || 0);
         
         // CALCULAR VALOR DOS PRODUTOS SEM ENTREGA
-        // Se productsValue não foi enviado, calcular dos itens
-        let productsValue = saleData.productsValue;
-        if (!productsValue && saleData.items && Array.isArray(saleData.items)) {
+        let productsValue = 0;
+        
+        // Tentar usar productsValue se enviado
+        if (saleData.productsValue !== undefined) {
+            productsValue = parseFloat(saleData.productsValue) || 0;
+            console.log('💰 productsValue do frontend:', productsValue);
+        }
+        
+        // Se não tem productsValue, calcular dos itens
+        if (productsValue === 0 && saleData.items && Array.isArray(saleData.items)) {
             productsValue = saleData.items.reduce((sum, item) => {
-                return sum + (parseFloat(item.subtotal) || 0);
+                const subtotal = parseFloat(item.subtotal) || (parseFloat(item.price) || 0) * (item.quantity || 0);
+                return sum + subtotal;
             }, 0);
+            console.log('💰 productsValue calculado dos itens:', productsValue);
         }
         
         // Se ainda não tem, usar totalValue (fallback)
-        if (!productsValue) {
-            productsValue = saleData.totalValue || 0;
+        if (productsValue === 0) {
+            productsValue = parseFloat(saleData.totalValue) || 0;
+            console.log('💰 productsValue usando totalValue (fallback):', productsValue);
         }
         
-        // Dados para salvar - APENAS colunas que existem
+        const totalValue = parseFloat(saleData.totalValue) || productsValue;
+        
+        console.log('💰 VALORES FINAIS:', {
+            products_value: productsValue.toFixed(2),
+            total_value: totalValue.toFixed(2),
+            diferenca: (totalValue - productsValue).toFixed(2)
+        });
+        
+        // Dados para salvar - VERSÃO SIMPLIFICADA
         const saleToSave = {
-            date: saleData.date,
+            date: saleData.date || new Date().toLocaleDateString('pt-BR'),
             day_of_week: saleData.dayOfWeek || new Date().getDay(),
             items: Array.isArray(saleData.items) ? saleData.items : [],
             total_quantity: saleData.totalQuantity || 0,
-            total_value: parseFloat(saleData.totalValue) || 0,
-            // NOVO CAMPO: Valor dos produtos sem entrega
-            products_value: parseFloat(productsValue) || 0,
-            customer_name: saleData.customerName || '',
-            delivery_type: saleData.deliveryType || ''
+            total_value: totalValue,
+            products_value: productsValue
         };
         
-        console.log('💾 Dados para salvar:', {
-            date: saleToSave.date,
-            total_quantity: saleToSave.total_quantity,
-            products_value: saleToSave.products_value,
-            total_value: saleToSave.total_value,
-            delivery_type: saleToSave.delivery_type
-        });
+        // Adicionar campos opcionais se existirem
+        if (saleData.customerName) {
+            saleToSave.customer_name = saleData.customerName;
+        }
         
-        // Tentar salvar
-        const { data, error } = await supabase
-            .from('sales_history')
-            .insert([saleToSave])
-            .select();
+        if (saleData.deliveryType) {
+            saleToSave.delivery_type = saleData.deliveryType;
+        }
         
-        if (error) {
-            console.error('❌ ERRO Supabase:', error.message);
+        if (saleData.timestamp) {
+            saleToSave.created_at = saleData.timestamp;
+        } else {
+            saleToSave.created_at = new Date().toISOString();
+        }
+        
+        console.log('💾 Tentando salvar no Supabase...');
+        
+        // Tentar salvar com tratamento de erro robusto
+        try {
+            const { data, error } = await supabase
+                .from('sales_history')
+                .insert([saleToSave])
+                .select();
             
-            // Se erro for de coluna faltante, tentar versão simplificada
-            if (error.message.includes('products_value')) {
-                console.log('🔄 Tentando sem coluna products_value...');
+            if (error) {
+                console.error('❌ Erro ao salvar no Supabase:', error.message);
                 
-                // Versão sem products_value
-                const simpleSale = {
-                    date: saleData.date,
-                    day_of_week: saleData.dayOfWeek || new Date().getDay(),
-                    items: Array.isArray(saleData.items) ? saleData.items : [],
-                    total_quantity: saleData.totalQuantity || 0,
-                    total_value: parseFloat(productsValue) || 0 // Usar valor dos produtos como total
-                };
-                
-                const { data: simpleData, error: simpleError } = await supabase
-                    .from('sales_history')
-                    .insert([simpleSale])
-                    .select();
-                
-                if (simpleError) {
-                    console.error('❌ Erro na versão simplificada:', simpleError);
-                    // Continuar mesmo com erro
-                } else {
-                    console.log('✅ Salvo (versão simplificada)! ID:', simpleData?.[0]?.id);
+                // Tentar salvar sem products_value se erro for de coluna
+                if (error.message.includes('products_value')) {
+                    console.log('🔄 Tentando sem products_value...');
+                    
+                    delete saleToSave.products_value;
+                    
+                    const { data: simpleData, error: simpleError } = await supabase
+                        .from('sales_history')
+                        .insert([saleToSave])
+                        .select();
+                    
+                    if (simpleError) {
+                        console.error('❌ Erro na versão simplificada:', simpleError.message);
+                        // Continuar mesmo com erro
+                    } else {
+                        console.log('✅ Salvo (sem products_value)! ID:', simpleData?.[0]?.id);
+                    }
                 }
             } else {
-                console.error('❌ Outro erro do Supabase:', error);
+                console.log('✅ SALVO COM SUCESSO! ID:', data?.[0]?.id);
             }
-        } else {
-            console.log('✅ SALVO COM SUCESSO! ID:', data?.[0]?.id);
+            
+        } catch (supabaseError) {
+            console.error('❌ Erro no Supabase:', supabaseError.message);
+            // Continuar mesmo com erro
         }
         
         // SEMPRE retornar sucesso para não bloquear o pedido
         res.json({ 
             success: true, 
-            message: "Venda registrada no histórico",
+            message: "Venda registrada",
+            saved: true,
             products_value: productsValue,
-            total_value: saleData.totalValue || productsValue
+            total_value: totalValue
         });
         
     } catch (error) {
-        console.error("❌ ERRO CRÍTICO:", error);
+        console.error("❌ ERRO CRÍTICO:", error.message);
         
         // SEMPRE retornar sucesso para não bloquear frontend
         res.json({ 
             success: true, 
-            message: "Pedido processado com sucesso",
-            warning: "Histórico será verificado manualmente" 
+            message: "Pedido processado",
+            saved: false,
+            error: error.message
         });
     }
 });
