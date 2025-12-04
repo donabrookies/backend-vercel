@@ -793,94 +793,99 @@ app.get("/api/sales-history", async (req, res) => {
 });
 
 // CORREÇÃO DEFINITIVA: Salvar venda no histórico - VERSÃO SIMPLIFICADA QUE SEMPRE FUNCIONA
-// CORREÇÃO DEFINITIVA: Salvar venda no histórico - VERSÃO SIMPLIFICADA QUE SEMPRE FUNCIONA
+// CORREÇÃO DEFINITIVA: Salvar venda no histórico - VERSÃO QUE SEMPRE FUNCIONA
 app.post("/api/sales-history", async (req, res) => {
+    console.log('📥 RECEBENDO DADOS DE VENDA...');
+    console.log('📊 Body recebido:', JSON.stringify(req.body).substring(0, 500));
+    
     try {
-        console.log('💾 SALVANDO VENDA - VERSÃO CORRIGIDA');
         const { saleData } = req.body;
         
         if (!saleData) {
-            console.log('⚠️ Dados inválidos - saleData está vazio');
-            return res.status(400).json({ error: "Dados inválidos" });
+            console.log('⚠️ ERRO: saleData está vazio ou nulo');
+            return res.json({ 
+                success: true, // Sempre retorna sucesso para não bloquear
+                saved: false,
+                message: "Dados não recebidos, mas pedido continua"
+            });
         }
         
+        console.log('📋 DADOS RECEBIDOS:');
         console.log('📅 Data:', saleData.date || 'Não informada');
-        console.log('👤 Cliente:', saleData.customerName || 'Sem nome');
-        console.log('📦 Itens:', saleData.items?.length || 0);
+        console.log('👤 Cliente:', saleData.customerName || 'Não informado');
+        console.log('📦 Total de itens:', saleData.items?.length || 0);
+        console.log('💰 Total Value:', saleData.totalValue || 0);
+        console.log('💰 Products Value:', saleData.productsValue || 0);
         
-        // CALCULAR VALOR DOS PRODUTOS SEM ENTREGA
+        // CALCULAR VALOR DOS PRODUTOS
         let productsValue = 0;
         
-        // Tentar usar productsValue se enviado
-        if (saleData.productsValue !== undefined) {
-            productsValue = parseFloat(saleData.productsValue) || 0;
-            console.log('💰 productsValue do frontend:', productsValue);
+        // 1. Usar productsValue se enviado
+        if (saleData.productsValue !== undefined && saleData.productsValue !== null) {
+            productsValue = parseFloat(saleData.productsValue);
+            console.log('💰 Products Value do frontend:', productsValue);
         }
         
-        // Se não tem productsValue, calcular dos itens
+        // 2. Se zero, calcular dos itens
         if (productsValue === 0 && saleData.items && Array.isArray(saleData.items)) {
             productsValue = saleData.items.reduce((sum, item) => {
-                const subtotal = parseFloat(item.subtotal) || (parseFloat(item.price) || 0) * (item.quantity || 0);
+                let subtotal = 0;
+                if (item.subtotal) {
+                    subtotal = parseFloat(item.subtotal);
+                } else if (item.price && item.quantity) {
+                    subtotal = parseFloat(item.price) * parseInt(item.quantity);
+                }
                 return sum + subtotal;
             }, 0);
-            console.log('💰 productsValue calculado dos itens:', productsValue);
+            console.log('💰 Products Value calculado dos itens:', productsValue);
         }
         
-        // Se ainda não tem, usar totalValue (fallback)
+        // 3. Se ainda zero, usar totalValue
         if (productsValue === 0) {
             productsValue = parseFloat(saleData.totalValue) || 0;
-            console.log('💰 productsValue usando totalValue (fallback):', productsValue);
+            console.log('💰 Products Value usando totalValue:', productsValue);
         }
         
         const totalValue = parseFloat(saleData.totalValue) || productsValue;
         
-        console.log('💰 VALORES FINAIS:', {
+        console.log('✅ VALORES FINAIS:', {
             products_value: productsValue.toFixed(2),
             total_value: totalValue.toFixed(2),
-            diferenca: (totalValue - productsValue).toFixed(2)
+            entrega: (totalValue - productsValue).toFixed(2)
         });
         
-        // Dados para salvar - VERSÃO SIMPLIFICADA
+        // PREPARAR DADOS PARA SALVAR
         const saleToSave = {
             date: saleData.date || new Date().toLocaleDateString('pt-BR'),
             day_of_week: saleData.dayOfWeek || new Date().getDay(),
             items: Array.isArray(saleData.items) ? saleData.items : [],
             total_quantity: saleData.totalQuantity || 0,
             total_value: totalValue,
-            products_value: productsValue
+            products_value: productsValue,
+            customer_name: saleData.customerName || '',
+            delivery_type: saleData.deliveryType || '',
+            created_at: saleData.timestamp || new Date().toISOString()
         };
         
-        // Adicionar campos opcionais se existirem
-        if (saleData.customerName) {
-            saleToSave.customer_name = saleData.customerName;
-        }
+        console.log('💾 DADOS PARA SALVAR NO SUPABASE:', JSON.stringify(saleToSave).substring(0, 300));
         
-        if (saleData.deliveryType) {
-            saleToSave.delivery_type = saleData.deliveryType;
-        }
+        let savedToSupabase = false;
+        let supabaseId = null;
         
-        if (saleData.timestamp) {
-            saleToSave.created_at = saleData.timestamp;
-        } else {
-            saleToSave.created_at = new Date().toISOString();
-        }
-        
-        console.log('💾 Tentando salvar no Supabase...');
-        
-        // Tentar salvar com tratamento de erro robusto
+        // TENTAR SALVAR NO SUPABASE
         try {
+            console.log('🔄 Tentando salvar no Supabase...');
             const { data, error } = await supabase
                 .from('sales_history')
                 .insert([saleToSave])
                 .select();
             
             if (error) {
-                console.error('❌ Erro ao salvar no Supabase:', error.message);
+                console.error('❌ Erro no Supabase:', error.message);
                 
-                // Tentar salvar sem products_value se erro for de coluna
+                // Tentar sem products_value se for erro de coluna
                 if (error.message.includes('products_value')) {
                     console.log('🔄 Tentando sem products_value...');
-                    
                     delete saleToSave.products_value;
                     
                     const { data: simpleData, error: simpleError } = await supabase
@@ -890,38 +895,76 @@ app.post("/api/sales-history", async (req, res) => {
                     
                     if (simpleError) {
                         console.error('❌ Erro na versão simplificada:', simpleError.message);
-                        // Continuar mesmo com erro
                     } else {
-                        console.log('✅ Salvo (sem products_value)! ID:', simpleData?.[0]?.id);
+                        savedToSupabase = true;
+                        supabaseId = simpleData?.[0]?.id;
+                        console.log('✅ Salvo no Supabase (sem products_value)! ID:', supabaseId);
                     }
                 }
             } else {
-                console.log('✅ SALVO COM SUCESSO! ID:', data?.[0]?.id);
+                savedToSupabase = true;
+                supabaseId = data?.[0]?.id;
+                console.log('✅ SALVO NO SUPABASE! ID:', supabaseId);
             }
-            
         } catch (supabaseError) {
-            console.error('❌ Erro no Supabase:', supabaseError.message);
-            // Continuar mesmo com erro
+            console.error('❌ Erro geral no Supabase:', supabaseError.message);
         }
         
-        // SEMPRE retornar sucesso para não bloquear o pedido
+        // SALVAR NO ARQUIVO LOCAL COMO BACKUP (para verificação)
+        if (!savedToSupabase) {
+            console.log('📁 Salvando em arquivo local de backup...');
+            try {
+                const fs = require('fs').promises;
+                const backupData = {
+                    ...saleToSave,
+                    backup_time: new Date().toISOString(),
+                    supabase_error: !savedToSupabase
+                };
+                
+                const backupFile = 'sales_backup.json';
+                let existingData = [];
+                
+                try {
+                    const fileContent = await fs.readFile(backupFile, 'utf8');
+                    existingData = JSON.parse(fileContent);
+                } catch (e) {
+                    existingData = [];
+                }
+                
+                existingData.push(backupData);
+                
+                // Manter apenas últimos 100 registros
+                if (existingData.length > 100) {
+                    existingData = existingData.slice(-100);
+                }
+                
+                await fs.writeFile(backupFile, JSON.stringify(existingData, null, 2));
+                console.log('✅ Salvo em arquivo local de backup');
+            } catch (fsError) {
+                console.log('⚠️ Não foi possível salvar em arquivo local:', fsError.message);
+            }
+        }
+        
+        // SEMPRE RETORNAR SUCESSO
         res.json({ 
-            success: true, 
-            message: "Venda registrada",
-            saved: true,
+            success: true,
+            saved: savedToSupabase,
+            supabase_id: supabaseId,
             products_value: productsValue,
-            total_value: totalValue
+            total_value: totalValue,
+            message: "Venda processada"
         });
         
     } catch (error) {
-        console.error("❌ ERRO CRÍTICO:", error.message);
+        console.error("❌ ERRO CRÍTICO NO ENDPOINT:", error.message);
+        console.error("Stack:", error.stack);
         
-        // SEMPRE retornar sucesso para não bloquear frontend
+        // SEMPRE RETORNAR SUCESSO MESMO COM ERRO
         res.json({ 
-            success: true, 
-            message: "Pedido processado",
+            success: true,
             saved: false,
-            error: error.message
+            error: error.message,
+            message: "Pedido processado (erro no histórico)"
         });
     }
 });
