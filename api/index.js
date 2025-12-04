@@ -1340,3 +1340,5 @@ ensureAdminCredentials().then(success => {
         console.log('⚠️ Sistema carregado, mas credenciais admin podem precisar de atenção');
     }
 });
+
+export default app;
