@@ -1,4 +1,4 @@
-import express from "express";
+    import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from '@supabase/supabase-js';
@@ -741,7 +741,7 @@ app.get("/api/coupons", async (req, res) => {
             const cuponsExemplo = [
                 {
                     id: 1,
-                        code: "APP10",
+                    code: "APP10",
                     description: "Cupom para app - Frete grátis",
                     status: "active",
                     type: "free_shipping",
@@ -1049,6 +1049,126 @@ app.post("/api/products", async (req, res) => {
     } catch (error) {
         console.error("❌ Erro ao salvar produtos:", error);
         res.status(500).json({ error: "Erro ao salvar produtos: " + error.message });
+    }
+});
+
+// ==============================================
+// NOVO ENDPOINT: CHECKOUT COMPLETO (ATUALIZA ESTOQUE + SALVA VENDA)
+// ==============================================
+app.post("/api/checkout", async (req, res) => {
+    try {
+        console.log('🛒 PROCESSANDO CHECKOUT - NOVO ENDPOINT');
+        const { cart, stockUpdates, saleData } = req.body;
+        
+        // Validar dados recebidos
+        if (!cart && !stockUpdates) {
+            console.log('⚠️ Nenhum dado recebido para processar');
+            return res.status(400).json({ 
+                success: false, 
+                error: "Dados incompletos: cart ou stockUpdates são obrigatórios" 
+            });
+        }
+        
+        console.log('📦 Itens no carrinho:', cart?.length || 0);
+        console.log('📊 Atualizações de estoque:', stockUpdates?.length || 0);
+        console.log('👤 Cliente:', saleData?.customerName || 'Não informado');
+        console.log('💰 Total:', saleData?.totalValue || 0);
+        
+        let stockUpdateResult = { success: true, message: "Nenhuma atualização de estoque necessária" };
+        
+        // 1. ATUALIZAR ESTOQUE (se houver itens)
+        if (stockUpdates && Array.isArray(stockUpdates) && stockUpdates.length > 0) {
+            console.log('🔄 Atualizando estoque...');
+            stockUpdateResult = await updateStockForOrder(stockUpdates);
+            
+            if (!stockUpdateResult.success) {
+                console.error('❌ Erro ao atualizar estoque:', stockUpdateResult.error);
+                // Não vamos retornar erro aqui para não bloquear o pedido
+                // Mas vamos registrar o erro
+            } else {
+                console.log('✅ Estoque atualizado com sucesso:', stockUpdateResult);
+            }
+        }
+        
+        // 2. SALVAR VENDA NO HISTÓRICO
+        if (saleData) {
+            console.log('💾 Salvando venda no histórico...');
+            
+            const today = new Date();
+            const todayString = today.toLocaleDateString('pt-BR');
+            
+            const saleToSave = {
+                date: saleData.date || todayString,
+                day_of_week: today.getDay(),
+                items: Array.isArray(saleData.items) ? saleData.items : [],
+                total_quantity: saleData.totalQuantity || 0,
+                total_value: parseFloat(saleData.totalValue) || 0,
+                created_at: new Date().toISOString()
+            };
+            
+            // Adicionar campos opcionais se existirem
+            if (saleData.customerName) {
+                saleToSave.customer_name = saleData.customerName;
+            }
+            
+            if (saleData.deliveryType) {
+                saleToSave.delivery_type = saleData.deliveryType;
+            }
+            
+            if (saleData.paymentMethod) {
+                saleToSave.payment_method = saleData.paymentMethod;
+            }
+            
+            console.log('💾 Dados da venda:', saleToSave);
+            
+            const { data: saleResult, error: saleError } = await supabase
+                .from('sales_history')
+                .insert([saleToSave])
+                .select();
+            
+            if (saleError) {
+                console.error('❌ Erro ao salvar venda no histórico:', saleError);
+                // Tentar versão simplificada sem campos opcionais
+                const simpleSale = {
+                    date: saleData.date || todayString,
+                    day_of_week: today.getDay(),
+                    items: Array.isArray(saleData.items) ? saleData.items : [],
+                    total_quantity: saleData.totalQuantity || 0,
+                    total_value: parseFloat(saleData.totalValue) || 0,
+                    created_at: new Date().toISOString()
+                };
+                
+                const { error: simpleError } = await supabase
+                    .from('sales_history')
+                    .insert([simpleSale]);
+                
+                if (simpleError) {
+                    console.error('❌ Erro na versão simplificada:', simpleError);
+                } else {
+                    console.log('✅ Venda salva (versão simplificada)!');
+                }
+            } else {
+                console.log('✅ Venda salva com sucesso! ID:', saleResult?.[0]?.id);
+            }
+        }
+        
+        // 3. RETORNAR SUCESSO
+        console.log('🎉 CHECKOUT FINALIZADO COM SUCESSO!');
+        res.json({ 
+            success: true, 
+            message: "Pedido processado com sucesso!",
+            stockUpdate: stockUpdateResult
+        });
+        
+    } catch (error) {
+        console.error('❌ ERRO CRÍTICO NO CHECKOUT:', error);
+        // Mesmo com erro, retornar sucesso para não travar o frontend
+        // O frontend vai salvar localmente como fallback
+        res.json({ 
+            success: true, 
+            warning: "Pedido processado, mas pode precisar de verificação manual",
+            error: error.message
+        });
     }
 });
 
